@@ -17,7 +17,8 @@ import {
   writeBatch, 
   serverTimestamp,
   setDoc,
-  getDocs
+  getDocs,
+  deleteField
 } from 'firebase/firestore';
 
 const STORAGE_KEY = 'producer_stack_react_v1';
@@ -190,12 +191,12 @@ export default function App() {
 
   const deleteTrack = async (id: string) => {
     if (!user) return;
-    if (confirm('Delete this track?')) {
-      try {
-        await deleteDoc(doc(db, 'tracks', id));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, `tracks/${id}`);
-      }
+    try {
+      console.log(`[UI] Deleting track: ${id}`);
+      await deleteDoc(doc(db, 'tracks', id));
+    } catch (err) {
+      console.error(`[UI] Delete track failed:`, err);
+      handleFirestoreError(err, OperationType.DELETE, `tracks/${id}`);
     }
   };
 
@@ -230,29 +231,29 @@ export default function App() {
     const project = projects.find(p => p.id === id);
     if (!project) return;
 
-    if (window.confirm(`Are you sure you want to delete the collection "${project.name}"? This will not delete the tracks; they will just become unassigned.`)) {
-      try {
-        console.log(`[UI] Deleting project: ${id}`);
-        const batch = writeBatch(db);
-        batch.delete(doc(db, 'projects', id));
-        
-        // Find tracks belonging to this project from the CURRENT state
-        const relatedTracks = tracks.filter(t => t.projectId === id);
-        console.log(`[UI] Unassigning ${relatedTracks.length} tracks`);
-        
-        relatedTracks.forEach(t => {
-          batch.update(doc(db, 'tracks', t.id), { 
-            projectId: null, 
-            updatedAt: serverTimestamp() 
-          });
+    try {
+      console.log(`[UI] Deleting project: ${id}`);
+      setSyncError(null);
+      
+      const batch = writeBatch(db);
+      batch.delete(doc(db, 'projects', id));
+      
+      const relatedTracks = tracks.filter(t => t.projectId === id);
+      console.log(`[UI] Unlinking ${relatedTracks.length} tracks`);
+      
+      relatedTracks.forEach(t => {
+        batch.update(doc(db, 'tracks', t.id), { 
+          projectId: deleteField(),
+          updatedAt: serverTimestamp() 
         });
-        
-        await batch.commit();
-        console.log(`[UI] Project deletion batch committed successfully`);
-      } catch (err) {
-        console.error(`[UI] Project deletion failed:`, err);
-        handleFirestoreError(err, OperationType.WRITE, 'deleteProjectBatch');
-      }
+      });
+      
+      await batch.commit();
+      console.log(`[UI] Project and ${relatedTracks.length} tracks successfully updated in batch`);
+    } catch (err) {
+      console.error(`[UI] Project deletion failed:`, err);
+      setSyncError("Failed to delete project. Please try again.");
+      handleFirestoreError(err, OperationType.WRITE, 'deleteProjectBatch');
     }
   };
 
@@ -543,33 +544,13 @@ export default function App() {
               <h2 className="text-sm font-medium text-studio-muted uppercase tracking-widest">Finished Tracks</h2>
               <div className="space-y-3">
                 {filteredTracks.map((track) => (
-                  <div key={track.id} className="bg-studio-base border border-studio-border p-4 rounded-xl flex items-center justify-between group">
-                    <div className="flex items-center gap-4">
-                      <div className="p-2 bg-studio-accent/10 rounded-lg text-studio-accent">
-                        <CheckCircle2 className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <div className="font-medium">{track.title}</div>
-                        <div className="text-xs text-studio-muted mt-0.5">{getArtist(track)}</div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button 
-                        onClick={() => updateTrack(track.id, { done: false })}
-                        className="p-2 text-studio-muted hover:text-studio-accent transition-colors"
-                        title="Restore"
-                      >
-                        <RotateCcw className="w-4 h-4" />
-                      </button>
-                      <button 
-                        onClick={() => deleteTrack(track.id)}
-                        className="p-2 text-studio-muted hover:text-red-400 transition-colors"
-                        title="Delete"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
+                  <ArchiveTrackRow 
+                    key={track.id} 
+                    track={track} 
+                    artist={getArtist(track)}
+                    onRestore={() => updateTrack(track.id, { done: false })}
+                    onDelete={() => deleteTrack(track.id)}
+                  />
                 ))}
                 {filteredTracks.length === 0 && (
                   <div className="py-20 text-center border border-dashed border-studio-border rounded-2xl">
@@ -689,6 +670,7 @@ function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, 
   key?: any;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
 
   return (
     <motion.div 
@@ -778,7 +760,7 @@ function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, 
                 className="flex items-center gap-2 text-xs text-studio-accent hover:underline"
               >
                 <ExternalLink className="w-3 h-3" />
-                <span>Open in Untitled</span>
+                <span>Open Link</span>
               </a>
             )}
 
@@ -808,10 +790,24 @@ function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, 
                 </button>
               </div>
               <button 
-                onClick={onDelete}
-                className="p-2 text-studio-muted hover:text-red-400 transition-colors"
+                onClick={(e) => { 
+                  e.stopPropagation(); 
+                  if (isConfirmingDelete) {
+                    onDelete();
+                  } else {
+                    setIsConfirmingDelete(true);
+                    setTimeout(() => setIsConfirmingDelete(false), 3000);
+                  }
+                }}
+                className={cn(
+                  "flex items-center justify-center transition-all relative z-10 font-bold rounded-lg shrink-0",
+                  isConfirmingDelete 
+                    ? "bg-red-500 text-white animate-pulse h-8 px-3 text-[10px]" 
+                    : "text-studio-muted hover:text-red-400 h-8 w-8 hover:bg-red-400/10"
+                )}
+                title="Delete Track"
               >
-                <Trash2 className="w-4 h-4" />
+                {isConfirmingDelete ? "CONFIRM" : <Trash2 className="w-4 h-4" />}
               </button>
             </div>
           </motion.div>
@@ -828,6 +824,7 @@ function ProjectCard({ project, tracks, onEdit, onDelete }: {
   onDelete: () => void | Promise<void>; 
   key?: any;
 }) {
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const avgCompletion = tracks.length 
     ? Math.round(tracks.reduce((s, t) => s + t.pct, 0) / tracks.length) 
     : 0;
@@ -853,18 +850,33 @@ function ProjectCard({ project, tracks, onEdit, onDelete }: {
             </div>
           </div>
         </div>
-        <div className="flex gap-1 opacity-0 md:opacity-100 group-hover:opacity-100 transition-opacity shrink-0">
+        <div className="flex gap-2 opacity-100 group-hover:opacity-100 transition-opacity shrink-0 relative z-20 pointer-events-auto">
           <button 
             onClick={(e) => { e.stopPropagation(); onEdit(); }} 
-            className="p-2 text-studio-muted hover:text-studio-text transition-colors"
+            className="flex items-center justify-center text-studio-muted hover:text-studio-text hover:bg-white/10 rounded-lg transition-all h-9 md:h-11 w-9 md:w-11 shrink-0"
+            title="Edit Project"
           >
-            <Edit3 className="w-4 h-4" />
+            <Edit3 className="w-4 h-4 md:w-5 md:h-5" />
           </button>
           <button 
-            onClick={(e) => { e.stopPropagation(); onDelete(); }} 
-            className="p-2 text-studio-muted hover:text-red-400 transition-colors"
+            onClick={(e) => { 
+              e.stopPropagation(); 
+              if (isConfirmingDelete) {
+                onDelete();
+              } else {
+                setIsConfirmingDelete(true);
+                setTimeout(() => setIsConfirmingDelete(false), 3000);
+              }
+            }} 
+            className={cn(
+              "flex items-center justify-center transition-all rounded-lg shrink-0",
+              isConfirmingDelete 
+                ? "bg-red-500 text-white animate-pulse h-9 md:h-11 px-3 text-[10px] font-bold" 
+                : "text-studio-muted hover:text-red-400 hover:bg-red-400/10 h-9 md:h-11 w-9 md:w-11"
+            )}
+            title="Delete Project"
           >
-            <Trash2 className="w-4 h-4" />
+            {isConfirmingDelete ? "CONFIRM" : <Trash2 className="w-4 h-4 md:w-5 md:h-5" />}
           </button>
         </div>
       </div>
@@ -900,6 +912,61 @@ function ProjectCard({ project, tracks, onEdit, onDelete }: {
         )}
       </div>
     </motion.div>
+  );
+}
+
+function ArchiveTrackRow({ track, artist, onRestore, onDelete }: { 
+  track: Track; 
+  artist: string; 
+  onRestore: () => void | Promise<void>; 
+  onDelete: () => void | Promise<void>;
+  key?: any;
+}) {
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+
+  return (
+    <div className="relative bg-studio-base border border-studio-border p-4 rounded-xl flex items-center justify-between group overflow-hidden">
+      <div className="flex items-center gap-4 min-w-0">
+        <div className="p-2 bg-studio-accent/10 rounded-lg text-studio-accent shrink-0">
+          <CheckCircle2 className="w-5 h-5" />
+        </div>
+        <div className="min-w-0">
+          <div className="font-medium truncate">{track.title}</div>
+          <div className="text-xs text-studio-muted mt-0.5 truncate">{artist}</div>
+        </div>
+      </div>
+      <div className="flex items-center gap-1 opacity-100 group-hover:opacity-100 transition-opacity shrink-0 relative z-10 pointer-events-auto">
+        {!isConfirmingDelete && (
+          <button 
+            onClick={(e) => { e.stopPropagation(); onRestore(); }}
+            className="flex items-center justify-center text-studio-muted hover:text-studio-accent transition-colors h-8 w-8 rounded-lg"
+            title="Restore"
+          >
+            <RotateCcw className="w-4 h-4" />
+          </button>
+        )}
+        <button 
+          onClick={(e) => { 
+            e.stopPropagation(); 
+            if (isConfirmingDelete) {
+              onDelete();
+            } else {
+              setIsConfirmingDelete(true);
+              setTimeout(() => setIsConfirmingDelete(false), 3000);
+            }
+          }}
+          className={cn(
+            "flex items-center justify-center transition-all rounded-lg shrink-0",
+            isConfirmingDelete 
+              ? "bg-red-500 text-white animate-pulse h-8 px-3 text-[10px] font-bold" 
+              : "text-studio-muted hover:text-red-400 h-8 w-8 hover:bg-red-400/10"
+          )}
+          title="Delete"
+        >
+          {isConfirmingDelete ? "CONFIRM" : <Trash2 className="w-4 h-4" />}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -949,6 +1016,7 @@ function AddTrackModal({ isOpen, onClose, projects, onSave, onBulkSave, initialT
   const [notes, setNotes] = useState('');
   const [untitled, setUntitled] = useState('');
   const [bulkTracks, setBulkTracks] = useState<string[]>(['']);
+  const [trackCountInput, setTrackCountInput] = useState('1');
 
   useEffect(() => {
     if (initialTrack) {
@@ -968,9 +1036,26 @@ function AddTrackModal({ isOpen, onClose, projects, onSave, onBulkSave, initialT
       setNotes('');
       setUntitled('');
       setBulkTracks(['']);
+      setTrackCountInput('1');
       setActiveTab('single');
     }
   }, [initialTrack, isOpen]);
+
+  const handleTrackCountChange = (val: string) => {
+    setTrackCountInput(val);
+    const count = parseInt(val);
+    if (!isNaN(count) && count >= 1 && count <= 50) {
+      setBulkTracks(prev => {
+        const next = [...prev];
+        if (count > next.length) {
+          return [...next, ...Array(count - next.length).fill('')];
+        } else if (count < next.length) {
+          return next.slice(0, count);
+        }
+        return next;
+      });
+    }
+  };
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -1115,13 +1200,13 @@ function AddTrackModal({ isOpen, onClose, projects, onSave, onBulkSave, initialT
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Untitled Link</label>
+                <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Link (Untitled, Dropbox, etc)</label>
                 <input 
                   type="url" 
                   value={untitled} 
                   onChange={e => setUntitled(e.target.value)}
                   className="w-full bg-studio-base border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent"
-                  placeholder="untitled://..."
+                  placeholder="https://..."
                 />
               </div>
               <div className="space-y-1.5">
@@ -1135,10 +1220,23 @@ function AddTrackModal({ isOpen, onClose, projects, onSave, onBulkSave, initialT
               </div>
             </div>
           ) : (
-            <div className="space-y-3 pt-4 border-t border-studio-border">
+            <div className="space-y-4 pt-4 border-t border-studio-border">
+              <div className="space-y-1.5 p-3 bg-studio-accent/5 border border-studio-accent/10 rounded-xl">
+                <label className="text-[10px] uppercase tracking-widest text-studio-accent font-bold block mb-1">How many tracks are you adding?</label>
+                <input 
+                  type="number" 
+                  min="1" 
+                  max="50"
+                  value={trackCountInput}
+                  onChange={e => handleTrackCountChange(e.target.value)}
+                  className="w-full bg-studio-base border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent font-mono"
+                  placeholder="Quantity (e.g. 5)"
+                />
+              </div>
+
               <div className="flex items-center justify-between">
-                <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Tracks</label>
-                <span className="text-[10px] font-mono text-studio-muted">{bulkTracks.length} tracks</span>
+                <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Track Titles</label>
+                <span className="text-[10px] font-mono text-studio-muted">{bulkTracks.length} total</span>
               </div>
               <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
                 {bulkTracks.map((t, idx) => (
@@ -1195,6 +1293,7 @@ function AddProjectModal({ isOpen, onClose, onSave, onSaveWithTracks, initialPro
   const [artist, setArtist] = useState('');
   const [notes, setNotes] = useState('');
   const [tracks, setTracks] = useState<string[]>(['']);
+  const [trackCountInput, setTrackCountInput] = useState('1');
 
   useEffect(() => {
     if (initialProject) {
@@ -1207,9 +1306,26 @@ function AddProjectModal({ isOpen, onClose, onSave, onSaveWithTracks, initialPro
       setArtist('');
       setNotes('');
       setTracks(['']);
+      setTrackCountInput('1');
       setActiveTab('project');
     }
   }, [initialProject, isOpen]);
+
+  const handleTrackCountChange = (val: string) => {
+    setTrackCountInput(val);
+    const count = parseInt(val);
+    if (!isNaN(count) && count >= 1 && count <= 50) {
+      setTracks(prev => {
+        const next = [...prev];
+        if (count > next.length) {
+          return [...next, ...Array(count - next.length).fill('')];
+        } else if (count < next.length) {
+          return next.slice(0, count);
+        }
+        return next;
+      });
+    }
+  };
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -1307,11 +1423,24 @@ function AddProjectModal({ isOpen, onClose, onSave, onSaveWithTracks, initialPro
           </div>
 
           {!initialProject && activeTab === 'project' && (
-            <div className="space-y-3 pt-4 border-t border-studio-border">
-              <>
+            <div className="space-y-4 pt-4 border-t border-studio-border">
+              <div className="space-y-1.5 p-3 bg-studio-accent/5 border border-studio-accent/10 rounded-xl">
+                  <label className="text-[10px] uppercase tracking-widest text-studio-accent font-bold block mb-1">How many tracks in this project?</label>
+                  <input 
+                    type="number" 
+                    min="1" 
+                    max="50"
+                    value={trackCountInput}
+                    onChange={e => handleTrackCountChange(e.target.value)}
+                    className="w-full bg-studio-base border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent font-mono"
+                    placeholder="Quantity (e.g. 5)"
+                  />
+              </div>
+
+              <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Tracks</label>
-                  <span className="text-[10px] font-mono text-studio-muted">{tracks.filter(t => t.trim()).length} tracks</span>
+                  <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Track Titles</label>
+                  <span className="text-[10px] font-mono text-studio-muted">{tracks.filter(t => t.trim()).length} total</span>
                 </div>
                 <div className="space-y-2 max-h-[240px] overflow-y-auto pr-1">
                   {tracks.map((t, idx) => (
@@ -1342,7 +1471,7 @@ function AddProjectModal({ isOpen, onClose, onSave, onSaveWithTracks, initialPro
                     Add Track
                   </button>
                 </div>
-              </>
+              </div>
             </div>
           )}
 

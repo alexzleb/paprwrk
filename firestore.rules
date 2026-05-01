@@ -33,9 +33,7 @@ service cloud.firestore {
         && data.name is string && data.name.size() > 0 && data.name.size() <= 200
         && data.ownerId == request.auth.uid
         && (data.artist == null || (data.artist is string && data.artist.size() <= 200))
-        && (data.notes == null || (data.notes is string && data.notes.size() <= 2000))
-        && data.createdAt == request.time
-        && data.updatedAt == request.time;
+        && (data.notes == null || (data.notes is string && data.notes.size() <= 2000));
     }
 
     function isValidTrack(data) {
@@ -47,9 +45,7 @@ service cloud.firestore {
         && (data.artist == null || (data.artist is string && data.artist.size() <= 200))
         && (data.projectId == null || isValidId(data.projectId))
         && (data.notes == null || (data.notes is string && data.notes.size() <= 2000))
-        && (data.untitled == null || (data.untitled is string && data.untitled.size() <= 500))
-        && data.createdAt == request.time
-        && data.updatedAt == request.time;
+        && (data.untitled == null || (data.untitled is string && data.untitled.size() <= 500));
     }
 
     // --- Collection Matches ---
@@ -60,7 +56,9 @@ service cloud.firestore {
       
       allow create: if isSignedIn() 
         && isValidId(projectId)
-        && isValidProject(incoming());
+        && isValidProject(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
 
       allow update: if isSignedIn()
         && isOwner(existing())
@@ -83,6 +81,8 @@ service cloud.firestore {
       allow create: if isSignedIn()
         && isValidId(trackId)
         && isValidTrack(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
         // Relational check: project must exist if set (using existsAfter to support batches)
         && (incoming().projectId == null || existsAfter(/databases/$(database)/documents/projects/$(incoming().projectId)));
 

@@ -67,6 +67,7 @@ service cloud.firestore {
         && incoming().ownerId == existing().ownerId
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
+        && isValidProject(incoming())
         && (
           // Action: Rename or update metadata
           incoming().diff(existing()).affectedKeys().hasOnly(['name', 'artist', 'notes', 'updatedAt'])
@@ -90,6 +91,7 @@ service cloud.firestore {
         && incoming().ownerId == existing().ownerId
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
+        && isValidTrack(incoming())
         && (
           // Action: Update progress/notes
           incoming().diff(existing()).affectedKeys().hasOnly(['pct', 'done', 'notes', 'title', 'artist', 'projectId', 'untitled', 'updatedAt'])

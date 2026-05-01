@@ -57,16 +57,17 @@ export default function App() {
     if (!user) {
       setTracks([]);
       setProjects([]);
+      setTracksLoaded(false);
+      setProjectsLoaded(false);
       return;
     }
 
-    setProjectsLoaded(false);
-    setTracksLoaded(false);
     const qProjects = query(collection(db, 'projects'), where('ownerId', '==', user.uid));
     const qTracks = query(collection(db, 'tracks'), where('ownerId', '==', user.uid));
 
-    const unsubProjects = onSnapshot(qProjects, (snapshot) => {
+    const unsubProjects = onSnapshot(qProjects, { includeMetadataChanges: true }, (snapshot) => {
       const p = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data({ serverTimestamps: 'estimate' }) } as Project));
+      console.log(`[STATE] Projects updated: ${p.length} docs`);
       setProjects(p);
       setProjectsLoaded(true);
       setSyncError(null);
@@ -76,8 +77,9 @@ export default function App() {
       handleFirestoreError(err, OperationType.LIST, 'projects');
     });
 
-    const unsubTracks = onSnapshot(qTracks, (snapshot) => {
+    const unsubTracks = onSnapshot(qTracks, { includeMetadataChanges: true }, (snapshot) => {
       const t = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data({ serverTimestamps: 'estimate' }) } as Track));
+      console.log(`[STATE] Tracks updated: ${t.length} docs (snapshot), total tracks state currently: ${tracks.length}`);
       setTracks(t);
       setTracksLoaded(true);
       setSyncError(null);
@@ -91,67 +93,13 @@ export default function App() {
       unsubProjects();
       unsubTracks();
     };
-  }, [user]);
+  }, [user?.uid]);
 
   // Handle migration from localStorage
   useEffect(() => {
     async function migrate() {
-      if (!user || dataLoading || projects.length > 0 || tracks.length > 0) return;
-      
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (!saved) return;
-      
-      const localData = JSON.parse(saved);
-      if (!localData.projects?.length && !localData.tracks?.length) return;
-
-      console.log('Migrating local data to Firebase...');
-      const batch = writeBatch(db);
-
-      // Create mapping for old numeric IDs to new string IDs if necessary
-      // But we can just use new IDs for everything.
-      
-      const localProjects = localData.projects || [];
-      const localTracks = localData.tracks || [];
-
-      // Maps old numeric ID to new string ID
-      const projectIdMap: Record<number, string> = {};
-
-      for (const p of localProjects) {
-        const newProjRef = doc(collection(db, 'projects'));
-        projectIdMap[p.id] = newProjRef.id;
-        batch.set(newProjRef, {
-          name: p.name,
-          artist: p.artist,
-          notes: p.notes,
-          ownerId: user.uid,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        });
-      }
-
-      for (const t of localTracks) {
-        const newTrackRef = doc(collection(db, 'tracks'));
-        batch.set(newTrackRef, {
-          title: t.title,
-          artist: t.artist,
-          projectId: t.projectId ? (projectIdMap[t.projectId] || null) : null,
-          pct: t.pct,
-          notes: t.notes,
-          untitled: t.untitled,
-          done: t.done,
-          ownerId: user.uid,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        });
-      }
-
-      try {
-        await batch.commit();
-        localStorage.removeItem(STORAGE_KEY);
-        console.log('Migration successful');
-      } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, 'migration');
-      }
+      // Temporarily disabled to debug tracks issue
+      return;
     }
     migrate();
   }, [user, dataLoading, projects.length, tracks.length]);
@@ -185,14 +133,24 @@ export default function App() {
     });
 
     // Sort: Older first, Newest at bottom
-    return [...result].sort((a, b) => {
-      // Use estimated server timestamp if available, else push to bottom
-      const timeA = a.createdAt?.seconds ?? (a.createdAt?.toMillis?.() / 1000) ?? Number.MAX_SAFE_INTEGER;
-      const timeB = b.createdAt?.seconds ?? (b.createdAt?.toMillis?.() / 1000) ?? Number.MAX_SAFE_INTEGER;
+    const sorted = [...result].sort((a, b) => {
+      // Robust timestamp extraction
+      const getTime = (val: any) => {
+        if (!val) return Number.MAX_SAFE_INTEGER;
+        if (typeof val.toMillis === 'function') return val.toMillis() / 1000;
+        if (typeof val.seconds === 'number') return val.seconds;
+        return Number.MAX_SAFE_INTEGER;
+      };
+
+      const timeA = getTime(a.createdAt);
+      const timeB = getTime(b.createdAt);
       
       if (timeA !== timeB) return timeA - timeB;
       return a.title.localeCompare(b.title);
     });
+
+    console.log(`[UI] Filtered tracks: ${sorted.length}/${tracks.length}. Active Tab: ${activeTab}`);
+    return sorted;
   }, [tracks, activeTab, filterArtist, filterProject, projectsMap]);
 
   const artists = useMemo(() => {
@@ -203,6 +161,7 @@ export default function App() {
   // Handlers
   const addTrack = async (track: Omit<Track, 'id'>) => {
     if (!user) return;
+    console.log(`[UI] Adding track: ${track.title}`);
     try {
       await addDoc(collection(db, 'tracks'), {
         ...track,
@@ -210,7 +169,9 @@ export default function App() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
+      console.log(`[UI] Track addDoc promise resolved successfully`);
     } catch (err) {
+      console.error(`[UI] Track addDoc failed:`, err);
       handleFirestoreError(err, OperationType.WRITE, 'tracks');
     }
   };
@@ -266,15 +227,30 @@ export default function App() {
 
   const deleteProject = async (id: string) => {
     if (!user) return;
-    if (confirm('Delete this project? Tracks become unassigned.')) {
+    const project = projects.find(p => p.id === id);
+    if (!project) return;
+
+    if (window.confirm(`Are you sure you want to delete the collection "${project.name}"? This will not delete the tracks; they will just become unassigned.`)) {
       try {
+        console.log(`[UI] Deleting project: ${id}`);
         const batch = writeBatch(db);
         batch.delete(doc(db, 'projects', id));
-        tracks.filter(t => t.projectId === id).forEach(t => {
-          batch.update(doc(db, 'tracks', t.id), { projectId: null, updatedAt: serverTimestamp() });
+        
+        // Find tracks belonging to this project from the CURRENT state
+        const relatedTracks = tracks.filter(t => t.projectId === id);
+        console.log(`[UI] Unassigning ${relatedTracks.length} tracks`);
+        
+        relatedTracks.forEach(t => {
+          batch.update(doc(db, 'tracks', t.id), { 
+            projectId: null, 
+            updatedAt: serverTimestamp() 
+          });
         });
+        
         await batch.commit();
+        console.log(`[UI] Project deletion batch committed successfully`);
       } catch (err) {
+        console.error(`[UI] Project deletion failed:`, err);
         handleFirestoreError(err, OperationType.WRITE, 'deleteProjectBatch');
       }
     }
@@ -282,9 +258,7 @@ export default function App() {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-studio-bg flex items-center justify-center">
-        <Loader2 className="w-8 h-8 text-studio-accent animate-spin" />
-      </div>
+      <div className="min-h-screen bg-studio-bg" />
     );
   }
 
@@ -298,11 +272,6 @@ export default function App() {
         >
           <div className="relative inline-block">
             <Layers className="w-16 h-16 text-studio-accent mx-auto mb-4" />
-            <motion.div 
-              animate={{ rotate: 360 }}
-              transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-              className="absolute -top-1 -right-1 w-6 h-6 border-2 border-studio-accent/20 rounded-full border-t-studio-accent"
-            />
           </div>
           <h1 className="text-4xl font-bold tracking-tight mb-2">paprwrk</h1>
           <p className="text-studio-muted text-sm max-w-[280px] mx-auto">The technical workspace for music producers.</p>
@@ -496,25 +465,25 @@ export default function App() {
 
               {/* Stack List */}
               <div className="space-y-3">
-                <AnimatePresence mode="popLayout">
-                  {filteredTracks.map((track, i) => (
-                    <TrackCard 
-                      key={track.id} 
-                      track={track} 
-                      index={i} 
-                      project={track.projectId ? projectsMap[track.projectId] : undefined}
-                      artist={getArtist(track)}
-                      onUpdate={(u) => updateTrack(track.id, u)}
-                      onDelete={() => deleteTrack(track.id)}
-                      onEdit={() => { setEditingTrack(track); setIsAddTrackOpen(true); }}
-                      isTop={i === 0}
-                    />
-                  ))}
-                </AnimatePresence>
+                {filteredTracks.map((track, i) => (
+                  <TrackCard 
+                    key={track.id} 
+                    track={track} 
+                    index={i} 
+                    project={track.projectId ? projectsMap[track.projectId] : undefined}
+                    artist={getArtist(track)}
+                    onUpdate={(u) => updateTrack(track.id, u)}
+                    onDelete={() => deleteTrack(track.id)}
+                    onEdit={() => { setEditingTrack(track); setIsAddTrackOpen(true); }}
+                    isTop={i === 0}
+                  />
+                ))}
                 {filteredTracks.length === 0 && (
                   <div className="py-20 text-center border border-dashed border-studio-border rounded-2xl">
                     <Layers className="w-10 h-10 text-studio-muted mx-auto mb-3 opacity-20" />
-                    <p className="text-studio-muted">Your stack is empty.</p>
+                    <p className="text-studio-muted text-sm px-10">
+                      {tracksLoaded ? "No music in this view yet." : "Syncing your studio..."}
+                    </p>
                   </div>
                 )}
               </div>
@@ -884,9 +853,19 @@ function ProjectCard({ project, tracks, onEdit, onDelete }: {
             </div>
           </div>
         </div>
-        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-          <button onClick={onEdit} className="p-2 text-studio-muted hover:text-studio-text transition-colors"><Edit3 className="w-4 h-4" /></button>
-          <button onClick={onDelete} className="p-2 text-studio-muted hover:text-red-400 transition-colors"><Trash2 className="w-4 h-4" /></button>
+        <div className="flex gap-1 opacity-0 md:opacity-100 group-hover:opacity-100 transition-opacity shrink-0">
+          <button 
+            onClick={(e) => { e.stopPropagation(); onEdit(); }} 
+            className="p-2 text-studio-muted hover:text-studio-text transition-colors"
+          >
+            <Edit3 className="w-4 h-4" />
+          </button>
+          <button 
+            onClick={(e) => { e.stopPropagation(); onDelete(); }} 
+            className="p-2 text-studio-muted hover:text-red-400 transition-colors"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
         </div>
       </div>
 
@@ -998,27 +977,30 @@ function AddTrackModal({ isOpen, onClose, projects, onSave, onBulkSave, initialT
     if (activeTab === 'single' || initialTrack) {
       if (!title.trim()) return;
       
-      // If adding a single and no project selected, use the track title as project name
-      if (activeTab === 'single' && !initialTrack && !projectId && !projectName) {
-        onBulkSave([{ title, artist, projectId: null, pct, notes, untitled, done: false }], title, artist);
-      } else {
-        onSave({ title, artist, projectId, pct, notes, untitled, done: false });
-      }
+      onSave({ 
+        title: title.trim(), 
+        artist: artist.trim(), 
+        projectId, 
+        pct, 
+        notes: notes.trim(), 
+        untitled: untitled.trim(), 
+        done: false 
+      });
     } else {
       const titles = bulkTracks.filter(t => t.trim());
       if (titles.length === 0) return;
       
       const tracks = titles.map(t => ({
-        title: t,
-        artist: artist,
+        title: t.trim(),
+        artist: artist.trim(),
         projectId: projectId,
         pct: 0,
         notes: '',
-        untitled: untitled,
+        untitled: untitled.trim(),
         done: false
       }));
       
-      onBulkSave(tracks, projectName, artist);
+      onBulkSave(tracks, projectName.trim(), artist.trim());
     }
     onClose();
   };

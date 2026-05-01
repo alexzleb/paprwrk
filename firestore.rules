@@ -1,0 +1,103 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(data) {
+      return data.ownerId == request.auth.uid;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Validation Blueprints ---
+    function isValidProject(data) {
+      return data.keys().hasAll(['name', 'ownerId', 'createdAt', 'updatedAt'])
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 200
+        && data.ownerId == request.auth.uid
+        && (data.artist == null || (data.artist is string && data.artist.size() <= 200))
+        && (data.notes == null || (data.notes is string && data.notes.size() <= 2000))
+        && data.createdAt == request.time
+        && data.updatedAt == request.time;
+    }
+
+    function isValidTrack(data) {
+      return data.keys().hasAll(['title', 'ownerId', 'createdAt', 'updatedAt', 'pct', 'done'])
+        && data.title is string && data.title.size() > 0 && data.title.size() <= 200
+        && data.ownerId == request.auth.uid
+        && data.pct is number && data.pct >= 0 && data.pct <= 100
+        && data.done is bool
+        && (data.artist == null || (data.artist is string && data.artist.size() <= 200))
+        && (data.projectId == null || isValidId(data.projectId))
+        && (data.notes == null || (data.notes is string && data.notes.size() <= 2000))
+        && (data.untitled == null || (data.untitled is string && data.untitled.size() <= 500))
+        && data.createdAt == request.time
+        && data.updatedAt == request.time;
+    }
+
+    // --- Collection Matches ---
+
+    match /projects/{projectId} {
+      allow get: if isSignedIn() && isOwner(existing());
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      
+      allow create: if isSignedIn() 
+        && isValidId(projectId)
+        && isValidProject(incoming());
+
+      allow update: if isSignedIn()
+        && isOwner(existing())
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action: Rename or update metadata
+          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'artist', 'notes', 'updatedAt'])
+        );
+
+      allow delete: if isSignedIn() && isOwner(existing());
+    }
+
+    match /tracks/{trackId} {
+      allow get: if isSignedIn() && isOwner(existing());
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+
+      allow create: if isSignedIn()
+        && isValidId(trackId)
+        && isValidTrack(incoming())
+        // Relational check: project must exist if set
+        && (incoming().projectId == null || exists(/databases/$(database)/documents/projects/$(incoming().projectId)));
+
+      allow update: if isSignedIn()
+        && isOwner(existing())
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action: Update progress/notes
+          incoming().diff(existing()).affectedKeys().hasOnly(['pct', 'done', 'notes', 'title', 'artist', 'projectId', 'untitled', 'updatedAt'])
+        )
+        // Relational check: project must exist if changing
+        && (incoming().projectId == null || exists(/databases/$(database)/documents/projects/$(incoming().projectId)));
+
+      allow delete: if isSignedIn() && isOwner(existing());
+    }
+  }
+}

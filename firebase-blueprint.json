@@ -1,0 +1,46 @@
+{
+  "entities": {
+    "Project": {
+      "title": "Project",
+      "description": "A collection of tracks, like an EP or Album",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Name of the project" },
+        "artist": { "type": "string", "description": "Main artist for the project" },
+        "notes": { "type": "string", "description": "General notes about the project" },
+        "ownerId": { "type": "string", "description": "UID of the owner" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "ownerId"]
+    },
+    "Track": {
+      "title": "Track",
+      "description": "A single song in progress",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Title of the track" },
+        "artist": { "type": "string", "description": "Artist of the track" },
+        "projectId": { "type": "string", "description": "ID of the parent project, if any" },
+        "pct": { "type": "number", "description": "Completion percentage 0-100" },
+        "notes": { "type": "string", "description": "Progress notes and next steps" },
+        "untitled": { "type": "string", "description": "Link to Untitled platform" },
+        "done": { "type": "boolean", "description": "Whether the track is finished" },
+        "ownerId": { "type": "string", "description": "UID of the owner" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "ownerId"]
+    }
+  },
+  "firestore": {
+    "/projects/{projectId}": {
+      "schema": "Project",
+      "description": "Root collection for all musical projects"
+    },
+    "/tracks/{trackId}": {
+      "schema": "Track",
+      "description": "Root collection for all tracks"
+    }
+  }
+}

@@ -66,7 +66,7 @@ export default function App() {
     const qTracks = query(collection(db, 'tracks'), where('ownerId', '==', user.uid));
 
     const unsubProjects = onSnapshot(qProjects, (snapshot) => {
-      const p = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Project));
+      const p = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data({ serverTimestamps: 'estimate' }) } as Project));
       setProjects(p);
       setProjectsLoaded(true);
       setSyncError(null);
@@ -77,7 +77,7 @@ export default function App() {
     });
 
     const unsubTracks = onSnapshot(qTracks, (snapshot) => {
-      const t = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Track));
+      const t = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data({ serverTimestamps: 'estimate' }) } as Track));
       setTracks(t);
       setTracksLoaded(true);
       setSyncError(null);

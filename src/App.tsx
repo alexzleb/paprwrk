@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, ReactNode, FormEvent } from 'react';
 import { Plus, Download, Archive, FolderKanban, Layers, Filter, X, ExternalLink, GripVertical, CheckCircle2, RotateCcw, Trash2, Edit3, Music, LogIn, LogOut, User as UserIcon, Loader2 } from 'lucide-react';
-import { motion, AnimatePresence, Reorder } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils.ts';
 import { Track, Project } from './types.ts';
 import { auth, db, loginWithGoogle, logout, handleFirestoreError, OperationType, testConnection } from './lib/firebase.ts';
@@ -27,7 +27,10 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [tracks, setTracks] = useState<Track[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [dataLoading, setDataLoading] = useState(false);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
+  const [tracksLoaded, setTracksLoaded] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const dataLoading = !projectsLoaded || !tracksLoaded;
 
   const [activeTab, setActiveTab] = useState<'stack' | 'projects' | 'archive'>('stack');
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -57,21 +60,32 @@ export default function App() {
       return;
     }
 
-    setDataLoading(true);
+    setProjectsLoaded(false);
+    setTracksLoaded(false);
     const qProjects = query(collection(db, 'projects'), where('ownerId', '==', user.uid));
     const qTracks = query(collection(db, 'tracks'), where('ownerId', '==', user.uid));
 
     const unsubProjects = onSnapshot(qProjects, (snapshot) => {
       const p = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Project));
       setProjects(p);
-      if (dataLoading) setDataLoading(false);
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'projects'));
+      setProjectsLoaded(true);
+      setSyncError(null);
+    }, (err) => {
+      console.error("Firestore Projects Error:", err);
+      setSyncError("Cloud sync interrupted. Check your internet or permissions.");
+      handleFirestoreError(err, OperationType.LIST, 'projects');
+    });
 
     const unsubTracks = onSnapshot(qTracks, (snapshot) => {
       const t = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Track));
       setTracks(t);
-      if (dataLoading) setDataLoading(false);
-    }, (err) => handleFirestoreError(err, OperationType.LIST, 'tracks'));
+      setTracksLoaded(true);
+      setSyncError(null);
+    }, (err) => {
+      console.error("Firestore Tracks Error:", err);
+      setSyncError("Cloud sync interrupted. Check your internet or permissions.");
+      handleFirestoreError(err, OperationType.LIST, 'tracks');
+    });
 
     return () => {
       unsubProjects();
@@ -158,7 +172,7 @@ export default function App() {
   };
 
   const filteredTracks = useMemo(() => {
-    return tracks.filter(t => {
+    let result = tracks.filter(t => {
       if (activeTab === 'stack' && t.done) return false;
       if (activeTab === 'archive' && !t.done) return false;
       
@@ -166,6 +180,17 @@ export default function App() {
       const projectMatch = filterProject === null || t.projectId === filterProject;
       
       return artistMatch && projectMatch;
+    });
+
+    // Default sort by created date (older first, new at bottom)
+    return result.sort((a, b) => {
+      // For pending writes, createdAt might be null or missing seconds
+      // Using MAX_SAFE_INTEGER ensures new/pending writes go to the bottom in ascending order
+      const timeA = a.createdAt?.seconds ?? Number.MAX_SAFE_INTEGER;
+      const timeB = b.createdAt?.seconds ?? Number.MAX_SAFE_INTEGER;
+      
+      if (timeA !== timeB) return timeA - timeB;
+      return a.title.localeCompare(b.title);
     });
   }, [tracks, activeTab, filterArtist, filterProject, projectsMap]);
 
@@ -254,22 +279,6 @@ export default function App() {
     }
   };
 
-  const reorderTracks = (_newTracks: Track[]) => {
-    // Reordering in Firestore is usually done with a SortOrder field.
-    // For now, in this app, reordering is local and saved via the list.
-    // To implement proper Firestore reordering, we'd need a 'position' field.
-    // Given the request, just letting the list be is a start.
-    // Reorder.Group expects to control the state, so we update the local state optimistically 
-    // BUT we need to save the positions.
-    // For now, let's just update the local state so the UI moves, 
-    // but without a position field, it won't persist in order.
-    setTracks(_newTracks); 
-  };
-
-  const reorderProjects = (_newProjects: Project[]) => {
-    setProjects(_newProjects);
-  };
-
   if (authLoading) {
     return (
       <div className="min-h-screen bg-studio-bg flex items-center justify-center">
@@ -295,7 +304,7 @@ export default function App() {
             />
           </div>
           <h1 className="text-4xl font-bold tracking-tight mb-2">paprwrk</h1>
-          <p className="text-studio-muted text-sm max-w-[280px] mx-auto">The technical workspace for music producers. Port your projects from Untitled and organize your studio flow.</p>
+          <p className="text-studio-muted text-sm max-w-[280px] mx-auto">The technical workspace for music producers.</p>
         </motion.div>
         
         <button 
@@ -317,6 +326,11 @@ export default function App() {
     <div className="min-h-screen font-sans selection:bg-studio-accent selection:text-studio-bg">
       {/* Header */}
       <header className="sticky top-0 z-40 bg-studio-bg/80 backdrop-blur-md border-b border-studio-border px-4 md:px-6 py-3 md:py-4 flex flex-col md:flex-row items-center justify-between gap-4 md:gap-0">
+        {syncError && (
+          <div className="absolute top-full left-0 right-0 bg-red-500/10 border-b border-red-500/20 py-1.5 px-4 text-[10px] text-red-400 font-bold text-center animate-pulse">
+            {syncError}
+          </div>
+        )}
         <div className="flex items-center justify-between w-full md:w-auto gap-3">
           <div className="flex items-center gap-2">
             <Layers className="w-5 h-5 md:w-6 md:h-6 text-studio-accent" />
@@ -480,32 +494,29 @@ export default function App() {
               </AnimatePresence>
 
               {/* Stack List */}
-              <Reorder.Group 
-                axis="y" 
-                onReorder={reorderTracks} 
-                values={filteredTracks}
-                className="space-y-3"
-              >
-                {filteredTracks.map((track, i) => (
-                  <TrackCard 
-                    key={track.id} 
-                    track={track} 
-                    index={i} 
-                    project={track.projectId ? projectsMap[track.projectId] : undefined}
-                    artist={getArtist(track)}
-                    onUpdate={(u) => updateTrack(track.id, u)}
-                    onDelete={() => deleteTrack(track.id)}
-                    onEdit={() => { setEditingTrack(track); setIsAddTrackOpen(true); }}
-                    isTop={i === 0}
-                  />
-                ))}
+              <div className="space-y-3">
+                <AnimatePresence mode="popLayout">
+                  {filteredTracks.map((track, i) => (
+                    <TrackCard 
+                      key={track.id} 
+                      track={track} 
+                      index={i} 
+                      project={track.projectId ? projectsMap[track.projectId] : undefined}
+                      artist={getArtist(track)}
+                      onUpdate={(u) => updateTrack(track.id, u)}
+                      onDelete={() => deleteTrack(track.id)}
+                      onEdit={() => { setEditingTrack(track); setIsAddTrackOpen(true); }}
+                      isTop={i === 0}
+                    />
+                  ))}
+                </AnimatePresence>
                 {filteredTracks.length === 0 && (
                   <div className="py-20 text-center border border-dashed border-studio-border rounded-2xl">
                     <Layers className="w-10 h-10 text-studio-muted mx-auto mb-3 opacity-20" />
                     <p className="text-studio-muted">Your stack is empty.</p>
                   </div>
                 )}
-              </Reorder.Group>
+              </div>
             </motion.div>
           )}
 
@@ -528,22 +539,19 @@ export default function App() {
                 </button>
               </div>
 
-              <Reorder.Group 
-                axis="y"
-                onReorder={reorderProjects}
-                values={projects}
-                className="grid grid-cols-1 md:grid-cols-2 gap-4"
-              >
-                {projects.map(project => (
-                  <ProjectCard 
-                    key={project.id}
-                    project={project}
-                    tracks={tracks.filter(t => t.projectId === project.id)}
-                    onEdit={() => { setEditingProject(project); setIsAddProjectOpen(true); }}
-                    onDelete={() => deleteProject(project.id)}
-                  />
-                ))}
-              </Reorder.Group>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <AnimatePresence mode="popLayout">
+                  {projects.map(project => (
+                    <ProjectCard 
+                      key={project.id}
+                      project={project}
+                      tracks={tracks.filter(t => t.projectId === project.id)}
+                      onEdit={() => { setEditingProject(project); setIsAddProjectOpen(true); }}
+                      onDelete={() => deleteProject(project.id)}
+                    />
+                  ))}
+                </AnimatePresence>
+              </div>
 
               {projects.length === 0 && (
                 <div className="py-20 text-center border border-dashed border-studio-border rounded-2xl" id="empty-projects">
@@ -704,8 +712,8 @@ function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, 
   index: number; 
   project?: Project;
   artist: string;
-  onUpdate: (u: Partial<Track>) => void;
-  onDelete: () => void;
+  onUpdate: (u: Partial<Track>) => void | Promise<void>;
+  onDelete: () => void | Promise<void>;
   onEdit: () => void;
   isTop?: boolean;
   key?: any;
@@ -713,8 +721,11 @@ function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, 
   const [isExpanded, setIsExpanded] = useState(false);
 
   return (
-    <Reorder.Item 
-      value={track}
+    <motion.div 
+      layout
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.95 }}
       className={cn(
         "bg-studio-base border rounded-xl overflow-hidden shadow-sm transition-colors",
         isExpanded ? "border-studio-muted" : "border-studio-border",
@@ -836,18 +847,27 @@ function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, 
           </motion.div>
         )}
       </AnimatePresence>
-    </Reorder.Item>
+    </motion.div>
   );
 }
 
-function ProjectCard({ project, tracks, onEdit, onDelete }: { project: Project; tracks: Track[]; onEdit: () => void; onDelete: () => void; key?: any }) {
+function ProjectCard({ project, tracks, onEdit, onDelete }: { 
+  project: Project; 
+  tracks: Track[]; 
+  onEdit: () => void; 
+  onDelete: () => void | Promise<void>; 
+  key?: any;
+}) {
   const avgCompletion = tracks.length 
     ? Math.round(tracks.reduce((s, t) => s + t.pct, 0) / tracks.length) 
     : 0;
 
   return (
-    <Reorder.Item 
-      value={project}
+    <motion.div 
+      layout
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.95 }}
       className="bg-studio-base border border-studio-border rounded-xl p-5 hover:border-studio-muted transition-colors group relative"
     >
       <div className="flex items-center justify-between mb-4">
@@ -899,7 +919,7 @@ function ProjectCard({ project, tracks, onEdit, onDelete }: { project: Project; 
           </div>
         )}
       </div>
-    </Reorder.Item>
+    </motion.div>
   );
 }
 

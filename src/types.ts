@@ -4,6 +4,7 @@ export interface Project {
   artist: string;
   notes: string;
   link?: string;
+  order?: number;
   ownerId?: string;
   createdAt?: any;
   updatedAt?: any;

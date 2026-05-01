@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, ReactNode, FormEvent, useRef, ChangeEvent } from 'react';
 import { Plus, Download, Archive, FolderKanban, Layers, Filter, X, ExternalLink, GripVertical, CheckCircle2, RotateCcw, Trash2, Edit3, Music, LogIn, LogOut, User as UserIcon, Loader2, GripHorizontal, ChevronDown, Headphones } from 'lucide-react';
-import { motion, AnimatePresence, Reorder } from 'motion/react';
+import { motion, AnimatePresence, Reorder, useDragControls } from 'motion/react';
 import { cn } from './lib/utils.ts';
 import { Track, Project } from './types.ts';
 import { auth, db, loginWithGoogle, logout, handleFirestoreError, OperationType, testConnection } from './lib/firebase.ts';
@@ -208,6 +208,39 @@ export default function App() {
     }
   };
 
+  const reorderProjects = async (newOrder: Project[]) => {
+    if (!user) return;
+    
+    // Update local state for immediate feedback
+    const updatedProjects = projects.map(p => {
+      const found = newOrder.find(np => np.id === p.id);
+      if (found) {
+        return { ...p, order: newOrder.indexOf(found) };
+      }
+      return p;
+    });
+    setProjects(updatedProjects);
+
+    // Sync to Firestore
+    try {
+      const batch = writeBatch(db);
+      newOrder.forEach((project, idx) => {
+        batch.update(doc(db, 'projects', project.id), {
+          order: idx,
+          updatedAt: serverTimestamp()
+        });
+      });
+      await batch.commit();
+    } catch (err) {
+      console.error("Failed to sync project order:", err);
+      handleFirestoreError(err, OperationType.WRITE, 'projects/batch-reorder');
+    }
+  };
+
+  const sortedProjects = useMemo(() => {
+    return [...projects].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  }, [projects]);
+
   const updateTrack = async (id: string, updates: Partial<Track>) => {
     if (!user) return;
     try {
@@ -234,8 +267,10 @@ export default function App() {
   const addProject = async (project: Omit<Project, 'id'>) => {
     if (!user) return;
     try {
+      const maxOrder = projects.reduce((max, p) => Math.max(max, p.order || 0), 0);
       await addDoc(collection(db, 'projects'), {
         ...project,
+        order: maxOrder + 1,
         ownerId: user.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
@@ -496,20 +531,19 @@ export default function App() {
                 className="space-y-3"
               >
                 {filteredTracks.map((track, i) => (
-                  <Reorder.Item key={track.id} value={track}>
-                    <TrackCard 
-                      track={track} 
-                      index={i} 
-                      project={track.projectId ? projectsMap[track.projectId] : undefined}
-                      artist={getArtist(track)}
-                      onUpdate={(u) => updateTrack(track.id, u)}
-                      onDelete={() => deleteTrack(track.id)}
-                      onEdit={() => { setEditingTrack(track); setIsAddTrackOpen(true); }}
-                      isTop={i === 0 && !filterArtist && !filterProject}
-                      isExpanded={expandedId === track.id}
-                      onToggle={() => setExpandedId(expandedId === track.id ? null : track.id)}
-                    />
-                  </Reorder.Item>
+                  <DraggableTrackItem 
+                    key={track.id}
+                    track={track} 
+                    index={i} 
+                    project={track.projectId ? projectsMap[track.projectId] : undefined}
+                    artist={getArtist(track)}
+                    onUpdate={(u) => updateTrack(track.id, u)}
+                    onDelete={() => deleteTrack(track.id)}
+                    onEdit={() => { setEditingTrack(track); setIsAddTrackOpen(true); }}
+                    isTop={i === 0 && !filterArtist && !filterProject}
+                    isExpanded={expandedId === track.id}
+                    onToggle={() => setExpandedId(expandedId === track.id ? null : track.id)}
+                  />
                 ))}
               </Reorder.Group>
               {filteredTracks.length === 0 && (
@@ -542,21 +576,26 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="space-y-3">
-                <AnimatePresence mode="popLayout">
-                  {projects.map(project => (
-                    <ProjectCard 
-                      key={project.id}
-                      project={project}
-                      tracks={tracks.filter(t => t.projectId === project.id)}
-                      onEdit={() => { setEditingProject(project); setIsAddProjectOpen(true); }}
-                      onDelete={() => deleteProject(project.id)}
-                      isExpanded={expandedId === project.id}
-                      onToggle={() => setExpandedId(expandedId === project.id ? null : project.id)}
-                    />
-                  ))}
-                </AnimatePresence>
-              </div>
+          <div className="space-y-3">
+            <Reorder.Group 
+              axis="y" 
+              values={sortedProjects} 
+              onReorder={reorderProjects}
+              className="space-y-3"
+            >
+              {sortedProjects.map(project => (
+                <DraggableProjectItem 
+                  key={project.id}
+                  project={project}
+                  tracks={tracks.filter(t => t.projectId === project.id)}
+                  onEdit={() => { setEditingProject(project); setIsAddProjectOpen(true); }}
+                  onDelete={() => deleteProject(project.id)}
+                  isExpanded={expandedId === project.id}
+                  onToggle={() => setExpandedId(expandedId === project.id ? null : project.id)}
+                />
+              ))}
+            </Reorder.Group>
+          </div>
 
               {projects.length === 0 && (
                 <div className="py-20 text-center border border-dashed border-studio-border rounded-2xl" id="empty-projects">
@@ -617,10 +656,12 @@ export default function App() {
                 } else {
                   const newProjRef = doc(collection(db, 'projects'));
                   currentProjectId = newProjRef.id;
+                  const maxProjOrder = projects.reduce((max, pr) => Math.max(max, pr.order || 0), 0);
                   batch.set(newProjRef, {
                     name: projectName,
                     artist: artist || '',
                     notes: '',
+                    order: maxProjOrder + 1,
                     ownerId: user.uid,
                     createdAt: serverTimestamp(),
                     updatedAt: serverTimestamp()
@@ -660,8 +701,10 @@ export default function App() {
               const newProjRef = doc(collection(db, 'projects'));
               const projectId = newProjRef.id;
 
+              const maxProjOrder = projects.reduce((max, tr) => Math.max(max, tr.order || 0), 0);
               batch.set(newProjRef, {
                 ...project,
+                order: maxProjOrder + 1,
                 ownerId: user.uid,
                 createdAt: serverTimestamp(),
                 updatedAt: serverTimestamp()
@@ -697,7 +740,71 @@ export default function App() {
   );
 }
 
-function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, isTop, isExpanded, onToggle }: { 
+function DraggableTrackItem({ 
+  track, 
+  index, 
+  project, 
+  artist, 
+  onUpdate, 
+  onDelete, 
+  onEdit, 
+  isTop, 
+  isExpanded, 
+  onToggle 
+}: {
+  track: Track;
+  index: number;
+  project?: Project;
+  artist: string;
+  onUpdate: (update: Partial<Track>) => void;
+  onDelete: () => void;
+  onEdit: () => void;
+  isTop: boolean;
+  isExpanded: boolean;
+  onToggle: () => void;
+  key?: string | number;
+}) {
+  const dragControls = useDragControls();
+  const [isDragging, setIsDragging] = useState(false);
+
+  return (
+    <Reorder.Item 
+      value={track}
+      dragListener={false}
+      dragControls={dragControls}
+      onDragStart={() => setIsDragging(true)}
+      onDragEnd={() => setIsDragging(false)}
+      whileDrag={{ 
+        zIndex: 100,
+        scale: 1.01,
+        boxShadow: "0 25px 50px -12px rgb(0 0 0 / 0.5)",
+      }}
+      className={cn(
+        "relative select-none",
+        isDragging ? "z-50" : "z-0"
+      )}
+      style={{
+        backgroundColor: isDragging ? "#151719" : "transparent"
+      }}
+    >
+      <TrackCard 
+        track={track} 
+        index={index} 
+        project={project}
+        artist={artist}
+        onUpdate={onUpdate}
+        onDelete={onDelete}
+        onEdit={onEdit}
+        isTop={isTop}
+        isExpanded={isExpanded}
+        onToggle={onToggle}
+        dragControls={dragControls}
+      />
+    </Reorder.Item>
+  );
+}
+
+function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, isTop, isExpanded, onToggle, dragControls }: { 
   track: Track; 
   index: number; 
   project?: Project;
@@ -709,6 +816,7 @@ function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, 
   isExpanded: boolean;
   onToggle: () => void;
   key?: any;
+  dragControls: any;
 }) {
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const [localPct, setLocalPct] = useState(track.pct);
@@ -721,7 +829,6 @@ function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, 
 
   return (
     <motion.div 
-      layout="position"
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.95 }}
@@ -732,8 +839,7 @@ function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, 
       )}
     >
       <div 
-        className="px-3 md:px-4 py-4.5 flex items-center gap-3 md:gap-4 cursor-pointer relative"
-        onClick={onToggle}
+        className="px-3 md:px-4 py-4.5 flex items-center gap-3 md:gap-4 relative"
       >
         <div 
           className="absolute bottom-0 left-0 h-[2px] bg-studio-accent pointer-events-none transition-all duration-1000 ease-out z-20" 
@@ -742,11 +848,20 @@ function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, 
         <div 
           className="absolute inset-x-0 bottom-0 h-[2px] bg-studio-accent/10 pointer-events-none z-10" 
         />
-        <div className="text-studio-muted hover:text-studio-text cursor-grab active:cursor-grabbing shrink-0 p-1 relative z-10 flex items-center justify-center">
+        <div 
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            dragControls.start(e);
+          }}
+          className="text-studio-muted hover:text-studio-text cursor-grab active:cursor-grabbing shrink-0 p-2 relative z-20 flex items-center justify-center touch-none"
+        >
           <GripVertical className="w-5 h-5" />
         </div>
 
-        <div className="flex-1 min-w-0 relative z-10">
+        <div 
+          className="flex-1 min-w-0 relative z-10 cursor-pointer"
+          onClick={onToggle}
+        >
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0 flex-1 flex flex-col justify-center">
                <div className="flex items-center gap-2">
@@ -913,7 +1028,59 @@ function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, 
   );
 }
 
-function ProjectCard({ project, tracks, onEdit, onDelete, isExpanded, onToggle }: { 
+function DraggableProjectItem({ 
+  project, 
+  tracks, 
+  onEdit, 
+  onDelete, 
+  isExpanded, 
+  onToggle 
+}: {
+  project: Project;
+  tracks: Track[];
+  onEdit: () => void;
+  onDelete: () => void;
+  isExpanded: boolean;
+  onToggle: () => void;
+  key?: string | number;
+}) {
+  const dragControls = useDragControls();
+  const [isDragging, setIsDragging] = useState(false);
+
+  return (
+    <Reorder.Item 
+      value={project}
+      dragListener={false}
+      dragControls={dragControls}
+      onDragStart={() => setIsDragging(true)}
+      onDragEnd={() => setIsDragging(false)}
+      whileDrag={{ 
+        zIndex: 100,
+        scale: 1.01,
+        boxShadow: "0 25px 50px -12px rgb(0 0 0 / 0.5)",
+      }}
+      className={cn(
+        "relative select-none",
+        isDragging ? "z-50" : "z-0"
+      )}
+      style={{
+        backgroundColor: isDragging ? "#151719" : "transparent"
+      }}
+    >
+      <ProjectCard 
+        project={project}
+        tracks={tracks}
+        onEdit={onEdit}
+        onDelete={onDelete}
+        isExpanded={isExpanded}
+        onToggle={onToggle}
+        dragControls={dragControls}
+      />
+    </Reorder.Item>
+  );
+}
+
+function ProjectCard({ project, tracks, onEdit, onDelete, isExpanded, onToggle, dragControls }: { 
   project: Project; 
   tracks: Track[]; 
   onEdit: () => void; 
@@ -921,6 +1088,7 @@ function ProjectCard({ project, tracks, onEdit, onDelete, isExpanded, onToggle }
   isExpanded: boolean;
   onToggle: () => void;
   key?: any;
+  dragControls: any;
 }) {
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const avgCompletion = tracks.length 
@@ -929,15 +1097,13 @@ function ProjectCard({ project, tracks, onEdit, onDelete, isExpanded, onToggle }
 
   return (
     <motion.div 
-      layout="position"
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.95 }}
       className={cn(
-        "bg-studio-base border rounded-xl overflow-hidden shadow-sm transition-all hover:border-white/20 active:ring-1 active:ring-white/10 cursor-pointer",
+        "bg-studio-base border rounded-xl overflow-hidden shadow-sm transition-all hover:border-white/20 active:ring-1 active:ring-white/10",
         isExpanded ? "border-white/20 shadow-lg" : "border-studio-border"
       )}
-      onClick={onToggle}
     >
       <div className="px-3 md:px-4 py-4 md:py-4.5 flex items-start justify-between gap-3 md:gap-4 relative">
         <div 
@@ -948,10 +1114,20 @@ function ProjectCard({ project, tracks, onEdit, onDelete, isExpanded, onToggle }
           className="absolute inset-x-0 bottom-0 h-[2px] bg-studio-accent/10 pointer-events-none z-10" 
         />
         
-        <div className="flex-1 min-w-0 relative z-10 flex items-start gap-3">
-          <div className="p-1.5 bg-studio-accent/10 rounded-lg text-studio-accent shrink-0 mt-0.5 md:mt-1 flex items-center justify-center">
-            <FolderKanban className="w-4 h-4" />
-          </div>
+        <div 
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            dragControls.start(e);
+          }}
+          className="text-studio-muted hover:text-studio-text cursor-grab active:cursor-grabbing shrink-0 p-2 relative z-20 flex items-center justify-center touch-none self-center"
+        >
+          <GripVertical className="w-5 h-5" />
+        </div>
+
+        <div 
+          className="flex-1 min-w-0 relative z-10 flex items-start gap-3 cursor-pointer"
+          onClick={onToggle}
+        >
           <div className="flex-1 min-w-0 flex flex-col">
             <div className="flex flex-col sm:flex-row sm:items-baseline gap-x-3 gap-y-0.5 min-w-0">
               <h3 className="font-semibold text-sm md:text-base truncate tracking-tight py-0.5">{project.name}</h3>

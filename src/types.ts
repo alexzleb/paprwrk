@@ -3,6 +3,7 @@ export interface Project {
   name: string;
   artist: string;
   notes: string;
+  link?: string;
   ownerId?: string;
   createdAt?: any;
   updatedAt?: any;
@@ -17,6 +18,7 @@ export interface Track {
   notes: string;
   untitled: string; // URL
   done: boolean;
+  order: number;
   ownerId?: string;
   createdAt?: any;
   updatedAt?: any;

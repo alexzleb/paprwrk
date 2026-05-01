@@ -8,6 +8,7 @@
         "name": { "type": "string", "description": "Name of the project" },
         "artist": { "type": "string", "description": "Main artist for the project" },
         "notes": { "type": "string", "description": "General notes about the project" },
+        "link": { "type": "string", "description": "Reference or listen link for the project" },
         "ownerId": { "type": "string", "description": "UID of the owner" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -26,6 +27,7 @@
         "notes": { "type": "string", "description": "Progress notes and next steps" },
         "untitled": { "type": "string", "description": "Link to Untitled platform" },
         "done": { "type": "boolean", "description": "Whether the track is finished" },
+        "order": { "type": "number", "description": "Display order in the list" },
         "ownerId": { "type": "string", "description": "UID of the owner" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }

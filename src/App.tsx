@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo, ReactNode, FormEvent } from 'react';
-import { Plus, Download, Archive, FolderKanban, Layers, Filter, X, ExternalLink, GripVertical, CheckCircle2, RotateCcw, Trash2, Edit3, Music, LogIn, LogOut, User as UserIcon, Loader2 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { useState, useEffect, useMemo, ReactNode, FormEvent, useRef, ChangeEvent } from 'react';
+import { Plus, Download, Archive, FolderKanban, Layers, Filter, X, ExternalLink, GripVertical, CheckCircle2, RotateCcw, Trash2, Edit3, Music, LogIn, LogOut, User as UserIcon, Loader2, GripHorizontal, ChevronDown, Headphones } from 'lucide-react';
+import { motion, AnimatePresence, Reorder } from 'motion/react';
 import { cn } from './lib/utils.ts';
 import { Track, Project } from './types.ts';
 import { auth, db, loginWithGoogle, logout, handleFirestoreError, OperationType, testConnection } from './lib/firebase.ts';
@@ -34,6 +34,7 @@ export default function App() {
   const dataLoading = !projectsLoaded || !tracksLoaded;
 
   const [activeTab, setActiveTab] = useState<'stack' | 'projects' | 'archive'>('stack');
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filterArtist, setFilterArtist] = useState('');
   const [filterProject, setFilterProject] = useState<string | null>(null);
@@ -135,19 +136,18 @@ export default function App() {
 
     // Sort: Older first, Newest at bottom
     const sorted = [...result].sort((a, b) => {
-      // Robust timestamp extraction
+      const orderA = a.order ?? 0;
+      const orderB = b.order ?? 0;
+      if (orderA !== orderB) return orderA - orderB;
+      
       const getTime = (val: any) => {
-        if (!val) return Number.MAX_SAFE_INTEGER;
-        if (typeof val.toMillis === 'function') return val.toMillis() / 1000;
-        if (typeof val.seconds === 'number') return val.seconds;
-        return Number.MAX_SAFE_INTEGER;
+        if (!val) return 0;
+        if (typeof val.toMillis === 'function') return val.toMillis();
+        if (typeof val.seconds === 'number') return val.seconds * 1000;
+        return 0;
       };
 
-      const timeA = getTime(a.createdAt);
-      const timeB = getTime(b.createdAt);
-      
-      if (timeA !== timeB) return timeA - timeB;
-      return a.title.localeCompare(b.title);
+      return getTime(a.createdAt) - getTime(b.createdAt);
     });
 
     console.log(`[UI] Filtered tracks: ${sorted.length}/${tracks.length}. Active Tab: ${activeTab}`);
@@ -160,12 +160,14 @@ export default function App() {
   }, [tracks, projectsMap]);
 
   // Handlers
-  const addTrack = async (track: Omit<Track, 'id'>) => {
+  const addTrack = async (track: Omit<Track, 'id' | 'order'>) => {
     if (!user) return;
     console.log(`[UI] Adding track: ${track.title}`);
     try {
+      const maxOrder = tracks.reduce((max, t) => Math.max(max, t.order || 0), 0);
       await addDoc(collection(db, 'tracks'), {
         ...track,
+        order: maxOrder + 1,
         ownerId: user.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
@@ -174,6 +176,35 @@ export default function App() {
     } catch (err) {
       console.error(`[UI] Track addDoc failed:`, err);
       handleFirestoreError(err, OperationType.WRITE, 'tracks');
+    }
+  };
+
+  const reorderTracks = async (newOrder: Track[]) => {
+    if (!user) return;
+    
+    // Update local state for immediate feedback
+    const updatedTracks = tracks.map(t => {
+      const found = newOrder.find(nt => nt.id === t.id);
+      if (found) {
+        return { ...t, order: newOrder.indexOf(found) };
+      }
+      return t;
+    });
+    setTracks(updatedTracks);
+
+    // Sync to Firestore
+    try {
+      const batch = writeBatch(db);
+      newOrder.forEach((track, idx) => {
+        batch.update(doc(db, 'tracks', track.id), {
+          order: idx,
+          updatedAt: serverTimestamp()
+        });
+      });
+      await batch.commit();
+    } catch (err) {
+      console.error("Failed to sync new order:", err);
+      handleFirestoreError(err, OperationType.WRITE, 'tracks/batch-reorder');
     }
   };
 
@@ -327,7 +358,7 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-4 w-full md:w-auto">
-          <nav className="flex bg-studio-base p-1 rounded-lg border border-studio-border flex-1 md:flex-none">
+          <nav className="flex bg-studio-base p-1 rounded-lg border border-studio-border flex-1 md:flex-none relative isolate">
             {[
               { id: 'stack', icon: Layers, label: 'stack' },
               { id: 'projects', icon: FolderKanban, label: 'projects' },
@@ -337,15 +368,23 @@ export default function App() {
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
                 className={cn(
-                  "flex items-center justify-center gap-2 px-2 md:px-3 py-1.5 rounded-md text-xs md:text-sm transition-all flex-1 md:flex-none",
+                  "flex items-center justify-center gap-2 px-2 md:px-3 py-1.5 rounded-md text-xs md:text-sm transition-all flex-1 md:flex-none relative",
+                  "hover:ring-1 hover:ring-white/20 active:scale-95 group",
                   activeTab === tab.id 
-                    ? "bg-studio-raised text-studio-text border border-studio-border shadow-sm" 
+                    ? "text-studio-text" 
                     : "text-studio-muted hover:text-studio-text"
                 )}
               >
-                <tab.icon className="w-3.5 h-3.5 md:w-4 md:h-4" />
-                <span className="hidden sm:inline">{tab.label}</span>
-                <span className="sm:hidden">{tab.id === 'projects' ? 'proj' : tab.label}</span>
+                {activeTab === tab.id && (
+                  <motion.div 
+                    layoutId="activeTab"
+                    className="absolute inset-0 bg-studio-raised border border-studio-border shadow-sm rounded-md -z-10"
+                    transition={{ type: "spring", duration: 0.5, bounce: 0.15 }}
+                  />
+                )}
+                <tab.icon className="w-3.5 h-3.5 md:w-4 md:h-4 shrink-0 relative z-10" />
+                <span className="hidden sm:inline relative z-10">{tab.label}</span>
+                <span className="sm:hidden relative z-10">{tab.label}</span>
               </button>
             ))}
           </nav>
@@ -380,21 +419,6 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
-              {/* Stats Summary */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
-                {[
-                  { label: 'in stack', value: filteredTracks.length },
-                  { label: 'avg completion', value: `${filteredTracks.length ? Math.round(filteredTracks.reduce((s, t) => s + t.pct, 0) / filteredTracks.length) : 0}%` },
-                  { label: '≥75% done', value: filteredTracks.filter(t => t.pct >= 75).length },
-                  { label: 'finished', value: tracks.filter(t => t.done).length }
-                ].map((stat, i) => (
-                  <div key={i} className="bg-studio-base border border-studio-border p-3 md:p-4 rounded-xl">
-                    <div className="text-xl md:text-2xl font-mono font-medium">{stat.value}</div>
-                    <div className="text-[10px] text-studio-muted uppercase tracking-wider mt-1">{stat.label}</div>
-                  </div>
-                ))}
-              </div>
-
               {/* Filters Toggle & Indicator */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -465,21 +489,30 @@ export default function App() {
               </AnimatePresence>
 
               {/* Stack List */}
-              <div className="space-y-3">
+              <Reorder.Group 
+                axis="y" 
+                values={filteredTracks} 
+                onReorder={reorderTracks}
+                className="space-y-3"
+              >
                 {filteredTracks.map((track, i) => (
-                  <TrackCard 
-                    key={track.id} 
-                    track={track} 
-                    index={i} 
-                    project={track.projectId ? projectsMap[track.projectId] : undefined}
-                    artist={getArtist(track)}
-                    onUpdate={(u) => updateTrack(track.id, u)}
-                    onDelete={() => deleteTrack(track.id)}
-                    onEdit={() => { setEditingTrack(track); setIsAddTrackOpen(true); }}
-                    isTop={i === 0}
-                  />
+                  <Reorder.Item key={track.id} value={track}>
+                    <TrackCard 
+                      track={track} 
+                      index={i} 
+                      project={track.projectId ? projectsMap[track.projectId] : undefined}
+                      artist={getArtist(track)}
+                      onUpdate={(u) => updateTrack(track.id, u)}
+                      onDelete={() => deleteTrack(track.id)}
+                      onEdit={() => { setEditingTrack(track); setIsAddTrackOpen(true); }}
+                      isTop={i === 0 && !filterArtist && !filterProject}
+                      isExpanded={expandedId === track.id}
+                      onToggle={() => setExpandedId(expandedId === track.id ? null : track.id)}
+                    />
+                  </Reorder.Item>
                 ))}
-                {filteredTracks.length === 0 && (
+              </Reorder.Group>
+              {filteredTracks.length === 0 && (
                   <div className="py-20 text-center border border-dashed border-studio-border rounded-2xl">
                     <Layers className="w-10 h-10 text-studio-muted mx-auto mb-3 opacity-20" />
                     <p className="text-studio-muted text-sm px-10">
@@ -487,7 +520,6 @@ export default function App() {
                     </p>
                   </div>
                 )}
-              </div>
             </motion.div>
           )}
 
@@ -510,7 +542,7 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-3">
                 <AnimatePresence mode="popLayout">
                   {projects.map(project => (
                     <ProjectCard 
@@ -519,6 +551,8 @@ export default function App() {
                       tracks={tracks.filter(t => t.projectId === project.id)}
                       onEdit={() => { setEditingProject(project); setIsAddProjectOpen(true); }}
                       onDelete={() => deleteProject(project.id)}
+                      isExpanded={expandedId === project.id}
+                      onToggle={() => setExpandedId(expandedId === project.id ? null : project.id)}
                     />
                   ))}
                 </AnimatePresence>
@@ -548,6 +582,7 @@ export default function App() {
                     key={track.id} 
                     track={track} 
                     artist={getArtist(track)}
+                    project={track.projectId ? projectsMap[track.projectId] : undefined}
                     onRestore={() => updateTrack(track.id, { done: false })}
                     onDelete={() => deleteTrack(track.id)}
                   />
@@ -593,10 +628,12 @@ export default function App() {
                 }
               }
               
-              bulkTracksData.forEach(t => {
+              bulkTracksData.forEach((t, idx) => {
                 const newTrackRef = doc(collection(db, 'tracks'));
+                const maxOrder = tracks.reduce((max, tr) => Math.max(max, tr.order || 0), 0);
                 batch.set(newTrackRef, {
                   ...t,
+                  order: maxOrder + idx + 1,
                   projectId: currentProjectId,
                   ownerId: user.uid,
                   createdAt: serverTimestamp(),
@@ -630,16 +667,18 @@ export default function App() {
                 updatedAt: serverTimestamp()
               });
 
-              trackTitles.forEach(title => {
+              trackTitles.forEach((title, idx) => {
                 const newTrackRef = doc(collection(db, 'tracks'));
+                const maxOrder = tracks.reduce((max, tr) => Math.max(max, tr.order || 0), 0);
                 batch.set(newTrackRef, {
                   title,
                   artist: project.artist || '',
                   projectId: projectId,
                   pct: 0,
                   notes: '',
-                  untitled: '',
+                  untitled: project.link || '',
                   done: false,
+                  order: maxOrder + idx + 1,
                   ownerId: user.uid,
                   createdAt: serverTimestamp(),
                   updatedAt: serverTimestamp()
@@ -658,7 +697,7 @@ export default function App() {
   );
 }
 
-function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, isTop }: { 
+function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, isTop, isExpanded, onToggle }: { 
   track: Track; 
   index: number; 
   project?: Project;
@@ -667,78 +706,92 @@ function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, 
   onDelete: () => void | Promise<void>;
   onEdit: () => void;
   isTop?: boolean;
+  isExpanded: boolean;
+  onToggle: () => void;
   key?: any;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+  const [localPct, setLocalPct] = useState(track.pct);
+
+  useEffect(() => {
+    setLocalPct(track.pct);
+  }, [track.pct]);
+
+  const listenLink = track.untitled || project?.link;
 
   return (
     <motion.div 
-      layout
+      layout="position"
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.95 }}
       className={cn(
-        "bg-studio-base border rounded-xl overflow-hidden shadow-sm transition-colors",
-        isExpanded ? "border-studio-muted" : "border-studio-border",
+        "bg-studio-base border rounded-xl overflow-hidden shadow-sm transition-all hover:border-white/20 active:ring-1 active:ring-white/10",
+        isExpanded ? "border-white/20" : "border-studio-border",
         isTop && !isExpanded && "border-studio-accent/50 ring-1 ring-studio-accent/20"
       )}
     >
       <div 
-        className="px-3 md:px-4 py-3 flex items-center gap-3 md:gap-4 cursor-pointer"
-        onClick={() => setIsExpanded(!isExpanded)}
+        className="px-3 md:px-4 py-4.5 flex items-center gap-3 md:gap-4 cursor-pointer relative"
+        onClick={onToggle}
       >
-        <div className="text-studio-muted hover:text-studio-text cursor-grab active:cursor-grabbing shrink-0">
-          <GripVertical className="w-4 h-4" />
-        </div>
-        
-        <div className="w-7 h-7 md:w-8 md:h-8 flex items-center justify-center font-mono text-[10px] md:text-xs font-bold text-studio-muted bg-studio-raised rounded-lg shrink-0">
-          #{index + 1}
+        <div 
+          className="absolute bottom-0 left-0 h-[2px] bg-studio-accent pointer-events-none transition-all duration-1000 ease-out z-20" 
+          style={{ width: `${track.pct}%` }} 
+        />
+        <div 
+          className="absolute inset-x-0 bottom-0 h-[2px] bg-studio-accent/10 pointer-events-none z-10" 
+        />
+        <div className="text-studio-muted hover:text-studio-text cursor-grab active:cursor-grabbing shrink-0 p-1 relative z-10 flex items-center justify-center">
+          <GripVertical className="w-5 h-5" />
         </div>
 
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h3 className="font-medium text-sm md:text-base truncate">{track.title}</h3>
-            {isTop && (
-              <span className="text-[8px] md:text-[9px] uppercase tracking-tighter bg-studio-accent text-studio-bg px-1.5 py-0.5 rounded font-bold shrink-0">Up Next</span>
-            )}
-          </div>
-          <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3 mt-1">
-            <div className="flex items-center gap-2 overflow-hidden">
-              {artist && (
-                <span className="text-[9px] md:text-[10px] uppercase font-bold text-studio-muted truncate">
-                  {artist}
-                </span>
-              )}
-              {project && (
-                <span className="text-[9px] md:text-[10px] uppercase font-bold text-studio-accent/70 truncate">
-                  {artist ? '• ' : ''}{project.name}
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2 flex-1 min-w-0">
-              <div className="h-1 flex-1 bg-studio-raised rounded-full overflow-hidden">
-                <motion.div 
-                  initial={{ width: 0 }}
-                  animate={{ width: `${track.pct}%` }}
-                  className="h-full bg-studio-accent"
-                />
+        <div className="flex-1 min-w-0 relative z-10">
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0 flex-1 flex flex-col justify-center">
+               <div className="flex items-center gap-2">
+                <h3 className="font-semibold text-sm md:text-base truncate tracking-tight">{track.title}</h3>
+                {/* Listen link moved to expanded view */}
+                {isTop && (
+                  <span className="text-[8px] md:text-[9px] uppercase tracking-tighter bg-studio-accent text-studio-bg px-1.5 py-0.5 rounded font-bold shrink-0">Up Next</span>
+                )}
               </div>
-              <span className="text-[9px] font-mono text-studio-muted w-7 text-right shrink-0">{track.pct}%</span>
+              <div className="flex items-center gap-1.5 mt-0.5 min-h-[14px]">
+                {artist && (
+                  <span className="text-[10px] md:text-[11px] uppercase font-bold text-studio-muted/70 tracking-wide shrink-0">
+                    {artist}
+                  </span>
+                )}
+                {artist && project && (
+                  <span className="text-[10px] text-studio-muted/40 font-bold">•</span>
+                )}
+                {project && (
+                  <span className="text-[10px] md:text-[11px] uppercase font-bold text-studio-accent/50 tracking-wide truncate max-w-[120px] md:max-w-[200px]">
+                    {project.name}
+                  </span>
+                )}
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-4 shrink-0 h-full">
+              <span className="text-xs md:text-sm font-mono font-bold text-studio-accent/70 tracking-tighter">{track.pct}%</span>
+              <ChevronDown className={cn("w-4 h-4 text-studio-muted transition-transform duration-300", isExpanded && "rotate-180")} />
             </div>
           </div>
         </div>
       </div>
 
-      <AnimatePresence>
+      <AnimatePresence initial={false}>
         {isExpanded && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            className="border-t border-studio-border px-4 py-4 space-y-4 bg-studio-raised/30"
+            transition={{ type: "spring", duration: 0.4, bounce: 0 }}
+            className="overflow-hidden"
           >
-            <div className="space-y-2">
+            <div className="border-t border-studio-border px-4 py-4 space-y-4 bg-studio-raised/30">
+              <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Progress</label>
                 <span className="text-xs font-mono">{track.pct}%</span>
@@ -746,8 +799,13 @@ function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, 
               <input 
                 type="range" 
                 min="0" max="100" 
-                value={track.pct}
-                onChange={(e) => onUpdate({ pct: parseInt(e.target.value) })}
+                value={localPct}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value);
+                  setLocalPct(val);
+                  const rounded = Math.round(val / 5) * 5;
+                  if (rounded !== track.pct) onUpdate({ pct: rounded });
+                }}
                 className="w-full accent-studio-accent bg-studio-border h-1.5 rounded-lg appearance-none cursor-pointer"
               />
             </div>
@@ -766,62 +824,102 @@ function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, 
 
             <div className="space-y-1.5">
               <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Notes</label>
-              <textarea 
+              <AutoResizeTextarea 
                 value={track.notes}
                 onChange={(e) => onUpdate({ notes: e.target.value })}
                 placeholder="Session thoughts, mix notes, or next steps..."
-                className="w-full bg-studio-base border border-studio-border rounded-lg p-3 text-sm min-h-[80px] outline-none focus:border-studio-accent transition-colors resize-none"
+                className="w-full bg-studio-base border border-studio-border rounded-lg p-3 text-sm outline-none focus:border-studio-accent transition-colors"
+                minHeight="80px"
               />
             </div>
 
             <div className="flex items-center justify-between pt-2 border-t border-studio-border">
-              <div className="flex gap-2">
+              <div className="flex items-center gap-1">
                 <button 
                   onClick={() => onUpdate({ done: true, pct: 100 })}
-                  className="px-3 py-1.5 text-xs font-medium bg-studio-accent text-studio-bg rounded-md transition-opacity hover:opacity-90"
+                  className="p-2 text-studio-accent hover:bg-studio-accent/10 rounded-lg transition-colors"
+                  title="Mark Done"
                 >
-                  Mark Done
+                  <CheckCircle2 className="w-4 h-4" />
                 </button>
                 <button 
                   onClick={onEdit}
-                  className="px-3 py-1.5 text-xs font-medium bg-studio-base border border-studio-border text-studio-text rounded-md hover:bg-studio-raised transition-colors"
+                  className="p-2 text-studio-muted hover:text-studio-text hover:bg-studio-raised rounded-lg transition-colors"
+                  title="Edit Track"
                 >
-                  Edit Track
+                  <Edit3 className="w-4 h-4" />
                 </button>
               </div>
-              <button 
-                onClick={(e) => { 
-                  e.stopPropagation(); 
-                  if (isConfirmingDelete) {
-                    onDelete();
-                  } else {
-                    setIsConfirmingDelete(true);
-                    setTimeout(() => setIsConfirmingDelete(false), 3000);
-                  }
-                }}
-                className={cn(
-                  "flex items-center justify-center transition-all relative z-10 font-bold rounded-lg shrink-0",
-                  isConfirmingDelete 
-                    ? "bg-red-500 text-white animate-pulse h-8 px-3 text-[10px]" 
-                    : "text-studio-muted hover:text-red-400 h-8 w-8 hover:bg-red-400/10"
+              <div className="flex items-center gap-1">
+                {listenLink && (
+                  <a 
+                    href={listenLink} 
+                    target="_blank" 
+                    rel="noopener noreferrer" 
+                    onClick={e => e.stopPropagation()}
+                    className="p-2 text-studio-muted hover:text-studio-accent hover:bg-studio-accent/10 rounded-lg transition-colors shrink-0"
+                    title="Quick Listen"
+                  >
+                    <Headphones className="w-4 h-4" />
+                  </a>
                 )}
-                title="Delete Track"
-              >
-                {isConfirmingDelete ? "CONFIRM" : <Trash2 className="w-4 h-4" />}
+                <button 
+                  onClick={(e) => { 
+                    e.stopPropagation(); 
+                    if (isConfirmingDelete) {
+                      onDelete();
+                    } else {
+                      setIsConfirmingDelete(true);
+                      setTimeout(() => setIsConfirmingDelete(false), 3000);
+                    }
+                  }}
+                  className={cn(
+                    "flex items-center justify-center transition-all relative z-10 font-bold rounded-lg shrink-0 overflow-hidden",
+                    isConfirmingDelete 
+                      ? "bg-red-500 text-white w-20 h-8 text-[10px]" 
+                      : "text-studio-muted hover:text-red-400 h-8 w-8 hover:bg-red-400/10"
+                  )}
+                  title="Delete Track"
+                >
+                <AnimatePresence mode="wait" initial={false}>
+                  {isConfirmingDelete ? (
+                    <motion.span
+                      key="confirm"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                    >
+                      CONFIRM
+                    </motion.span>
+                  ) : (
+                    <motion.div
+                      key="trash"
+                      initial={{ opacity: 0, scale: 0.5 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.5 }}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </button>
             </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </motion.div>
+          </div>
+        </div>
+      </motion.div>
+    )}
+  </AnimatePresence>
+</motion.div>
   );
 }
 
-function ProjectCard({ project, tracks, onEdit, onDelete }: { 
+function ProjectCard({ project, tracks, onEdit, onDelete, isExpanded, onToggle }: { 
   project: Project; 
   tracks: Track[]; 
   onEdit: () => void; 
   onDelete: () => void | Promise<void>; 
+  isExpanded: boolean;
+  onToggle: () => void;
   key?: any;
 }) {
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
@@ -831,111 +929,220 @@ function ProjectCard({ project, tracks, onEdit, onDelete }: {
 
   return (
     <motion.div 
-      layout
-      initial={{ opacity: 0, scale: 0.95 }}
-      animate={{ opacity: 1, scale: 1 }}
+      layout="position"
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.95 }}
-      className="bg-studio-base border border-studio-border rounded-xl p-5 hover:border-studio-muted transition-colors group relative"
+      className={cn(
+        "bg-studio-base border rounded-xl overflow-hidden shadow-sm transition-all hover:border-white/20 active:ring-1 active:ring-white/10 cursor-pointer",
+        isExpanded ? "border-white/20 shadow-lg" : "border-studio-border"
+      )}
+      onClick={onToggle}
     >
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="text-studio-muted hover:text-studio-text cursor-grab active:cursor-grabbing">
-            <GripVertical className="w-4 h-4" />
+      <div className="px-3 md:px-4 py-4 md:py-4.5 flex items-start justify-between gap-3 md:gap-4 relative">
+        <div 
+          className="absolute bottom-0 left-0 h-[2px] bg-studio-accent pointer-events-none transition-all duration-1000 ease-out z-20" 
+          style={{ width: `${avgCompletion}%` }} 
+        />
+        <div 
+          className="absolute inset-x-0 bottom-0 h-[2px] bg-studio-accent/10 pointer-events-none z-10" 
+        />
+        
+        <div className="flex-1 min-w-0 relative z-10 flex items-start gap-3">
+          <div className="p-1.5 bg-studio-accent/10 rounded-lg text-studio-accent shrink-0 mt-0.5 md:mt-1 flex items-center justify-center">
+            <FolderKanban className="w-4 h-4" />
           </div>
-          <div className="min-w-0">
-            <h3 className="text-base font-medium truncate">{project.name}</h3>
-            <div className="text-xs text-studio-muted mt-0.5 truncate">
-              {project.artist && <span>{project.artist} • </span>}
-              {tracks.length} tracks
+          <div className="flex-1 min-w-0 flex flex-col">
+            <div className="flex flex-col sm:flex-row sm:items-baseline gap-x-3 gap-y-0.5 min-w-0">
+              <h3 className="font-semibold text-sm md:text-base truncate tracking-tight py-0.5">{project.name}</h3>
+              {project.artist && (
+                <span className="text-[10px] md:text-[11px] uppercase font-bold text-studio-muted/70 tracking-wide">
+                  {project.artist}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 mt-1.5 text-[10px] md:text-[11px] font-bold uppercase tracking-wide">
+                 <span className="text-studio-muted/70 shrink-0">{tracks.length} TRACKS</span>
+                 <span className="text-studio-border/30 shrink-0">|</span>
+                 <div className="flex items-center gap-[3px] text-studio-accent/50 shrink-0">
+                  <span>{avgCompletion}%</span>
+                  <span>COMPLETE</span>
+                 </div>
             </div>
           </div>
         </div>
-        <div className="flex gap-2 opacity-100 group-hover:opacity-100 transition-opacity shrink-0 relative z-20 pointer-events-auto">
-          <button 
-            onClick={(e) => { e.stopPropagation(); onEdit(); }} 
-            className="flex items-center justify-center text-studio-muted hover:text-studio-text hover:bg-white/10 rounded-lg transition-all h-9 md:h-11 w-9 md:w-11 shrink-0"
-            title="Edit Project"
-          >
-            <Edit3 className="w-4 h-4 md:w-5 md:h-5" />
-          </button>
-          <button 
-            onClick={(e) => { 
-              e.stopPropagation(); 
-              if (isConfirmingDelete) {
-                onDelete();
-              } else {
-                setIsConfirmingDelete(true);
-                setTimeout(() => setIsConfirmingDelete(false), 3000);
-              }
-            }} 
-            className={cn(
-              "flex items-center justify-center transition-all rounded-lg shrink-0",
-              isConfirmingDelete 
-                ? "bg-red-500 text-white animate-pulse h-9 md:h-11 px-3 text-[10px] font-bold" 
-                : "text-studio-muted hover:text-red-400 hover:bg-red-400/10 h-9 md:h-11 w-9 md:w-11"
+
+        <div className="flex items-center gap-2 md:gap-3 shrink-0 relative z-10 mt-0.5 md:mt-1">
+          <div className="flex items-center gap-1 md:gap-1.5" onClick={e => e.stopPropagation()}>
+            {project.link && (
+              <a 
+                href={project.link} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="p-1.5 md:p-2 text-studio-muted hover:text-studio-accent hover:bg-studio-accent/10 rounded-lg transition-colors"
+                title="Quick Listen"
+              >
+                <Headphones className="w-4.5 h-4.5" />
+              </a>
             )}
-            title="Delete Project"
+            <button 
+              onClick={onEdit} 
+              className="p-1.5 md:p-2 text-studio-muted hover:text-studio-text transition-colors"
+              title="Edit Project"
+            >
+              <Edit3 className="w-4 h-4" />
+            </button>
+            <button 
+              onClick={() => { 
+                if (isConfirmingDelete) {
+                  onDelete();
+                } else {
+                  setIsConfirmingDelete(true);
+                  setTimeout(() => setIsConfirmingDelete(false), 3000);
+                }
+              }}
+              className={cn(
+                "flex items-center justify-center transition-all rounded-lg shrink-0 overflow-hidden",
+                isConfirmingDelete 
+                  ? "bg-red-500 text-white w-20 h-8 text-[10px] font-bold" 
+                  : "text-studio-muted hover:text-red-400 h-8 w-8 hover:bg-red-400/10"
+              )}
+              title="Delete Project"
+            >
+              <AnimatePresence mode="wait" initial={false}>
+                {isConfirmingDelete ? (
+                  <motion.span
+                    key="confirm"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                  >
+                    CONFIRM
+                  </motion.span>
+                ) : (
+                  <motion.div
+                    key="trash"
+                    initial={{ opacity: 0, scale: 0.5 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.5 }}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </button>
+          </div>
+          <button 
+            className="flex items-center p-1 text-studio-muted hover:text-studio-text transition-colors relative z-20"
+            onClick={(e) => { e.stopPropagation(); onToggle(); }}
+            title={isExpanded ? "Collapse" : "Expand"}
           >
-            {isConfirmingDelete ? "CONFIRM" : <Trash2 className="w-4 h-4 md:w-5 md:h-5" />}
+            <ChevronDown className={cn("w-5 h-5 transition-transform duration-300", isExpanded && "rotate-180")} />
           </button>
         </div>
       </div>
 
-      <div className="space-y-4">
-        <div className="space-y-2">
-          <div className="flex justify-between items-center text-[10px] uppercase tracking-widest text-studio-muted font-bold">
-            <span>Overall Progress</span>
-            <span className="font-mono text-studio-text">{avgCompletion}%</span>
-          </div>
-          <div className="h-2 bg-studio-raised rounded-full overflow-hidden">
-            <motion.div 
-              initial={{ width: 0 }}
-              animate={{ width: `${avgCompletion}%` }}
-              className="h-full bg-studio-accent"
-            />
-          </div>
-        </div>
+      <AnimatePresence initial={false}>
+        {isExpanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ type: "spring", duration: 0.4, bounce: 0 }}
+            className="overflow-hidden"
+          >
+            <div className="p-4 space-y-4 border-t border-studio-border bg-studio-raised/10">
+              {project.notes && (
+                <div className="bg-studio-muted/10 border border-studio-border/30 rounded-lg p-3">
+                  <label className="text-[9px] uppercase tracking-widest text-studio-muted font-bold block mb-2 px-1">Notes</label>
+                  <p className="text-[10px] md:text-xs text-studio-text/80 whitespace-pre-wrap px-1">{project.notes}</p>
+                </div>
+              )}
 
-        {tracks.length > 0 && (
-          <div className="space-y-2 pt-2 border-t border-studio-border">
-            {tracks.slice(0, 3).map(track => (
-              <div key={track.id} className="flex items-center gap-3 text-xs">
-                <div className={cn("w-1.5 h-1.5 rounded-full", track.done ? "bg-studio-accent" : "bg-studio-muted")} />
-                <span className={cn("flex-1 truncate", track.done && "line-through text-studio-muted")}>{track.title}</span>
-                <span className="text-[10px] font-mono text-studio-muted">{track.pct}%</span>
+              <div className="space-y-3 bg-studio-muted/5 border border-studio-border/30 rounded-lg p-3">
+                <label className="text-[9px] uppercase tracking-widest text-studio-muted font-bold block mb-2 px-1">Track Breakdown</label>
+                <div className="space-y-1.5">
+                  {tracks.length === 0 ? (
+                    <p className="text-[10px] text-studio-muted italic px-1">No tracks in this project.</p>
+                  ) : (
+                    [...tracks].sort((a, b) => a.pct - b.pct).map(track => (
+                      <div key={track.id} className="flex items-center gap-3 text-xs md:text-sm font-semibold tracking-tight relative overflow-hidden group pt-1.5 pb-[8px] px-1">
+                        <div 
+                          className="absolute bottom-0 left-0 h-[3px] bg-studio-accent/40 pointer-events-none transition-all duration-1000 ease-out z-20" 
+                          style={{ width: `${track.pct}%` }} 
+                        />
+                        <div 
+                          className="absolute inset-x-0 bottom-0 h-[3px] bg-studio-border/30 pointer-events-none z-10" 
+                        />
+                        <span className={cn("flex-1 truncate relative z-10", track.done && "line-through text-studio-muted/50")}>{track.title}</span>
+                        <div className="flex items-center gap-2 relative z-10">
+                          <span className="text-[10px] md:text-xs font-mono text-studio-accent/70 w-8 text-right">{track.pct}%</span>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
-            ))}
-            {tracks.length > 3 && (
-              <div className="text-[10px] text-studio-muted">+ {tracks.length - 3} more tracks</div>
-            )}
-          </div>
+            </div>
+          </motion.div>
         )}
-      </div>
+      </AnimatePresence>
     </motion.div>
   );
 }
 
-function ArchiveTrackRow({ track, artist, onRestore, onDelete }: { 
+function ArchiveTrackRow({ track, artist, project, onRestore, onDelete }: { 
   track: Track; 
   artist: string; 
+  project?: Project;
   onRestore: () => void | Promise<void>; 
   onDelete: () => void | Promise<void>;
   key?: any;
 }) {
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+  const listenLink = track.untitled || project?.link;
 
   return (
-    <div className="relative bg-studio-base border border-studio-border p-4 rounded-xl flex items-center justify-between group overflow-hidden">
-      <div className="flex items-center gap-4 min-w-0">
-        <div className="p-2 bg-studio-accent/10 rounded-lg text-studio-accent shrink-0">
+    <div className="relative bg-studio-base border border-studio-border px-3 md:px-4 py-3 md:py-4 rounded-xl flex items-center justify-between group overflow-hidden">
+      <div className="flex items-center gap-3 md:gap-4 min-w-0">
+        <div className="p-2 bg-studio-accent/20 rounded-lg text-studio-accent shrink-0 flex items-center justify-center">
           <CheckCircle2 className="w-5 h-5" />
         </div>
-        <div className="min-w-0">
-          <div className="font-medium truncate">{track.title}</div>
-          <div className="text-xs text-studio-muted mt-0.5 truncate">{artist}</div>
+        <div className="min-w-0 flex flex-col justify-center">
+          <div className="flex items-center gap-2">
+            <div className="font-semibold text-sm md:text-base truncate tracking-tight">{track.title}</div>
+            {/* Listen link moved beside delete icon */}
+          </div>
+          <div className="flex items-center gap-1.5 mt-0.5 min-h-[14px]">
+            {artist && (
+              <span className="text-[10px] md:text-[11px] uppercase font-bold text-studio-muted/70 tracking-wide shrink-0">
+                {artist}
+              </span>
+            )}
+            {artist && project && (
+              <span className="text-[10px] text-studio-muted/40 font-bold">•</span>
+            )}
+            {project && (
+              <span className="text-[10px] md:text-[11px] uppercase font-bold text-studio-accent/40 tracking-wide truncate max-w-[120px]">
+                {project.name}
+              </span>
+            )}
+          </div>
         </div>
       </div>
-      <div className="flex items-center gap-1 opacity-100 group-hover:opacity-100 transition-opacity shrink-0 relative z-10 pointer-events-auto">
+      <div className="flex items-center gap-1 shrink-0 relative z-10">
+        {!isConfirmingDelete && listenLink && (
+          <a 
+            href={listenLink} 
+            target="_blank" 
+            rel="noopener noreferrer" 
+            onClick={e => e.stopPropagation()}
+            className="p-2 text-studio-muted hover:text-studio-accent hover:bg-studio-accent/10 rounded-lg transition-colors"
+            title="Quick Listen"
+          >
+            <Headphones className="w-4 h-4" />
+          </a>
+        )}
         {!isConfirmingDelete && (
           <button 
             onClick={(e) => { e.stopPropagation(); onRestore(); }}
@@ -945,26 +1152,46 @@ function ArchiveTrackRow({ track, artist, onRestore, onDelete }: {
             <RotateCcw className="w-4 h-4" />
           </button>
         )}
-        <button 
-          onClick={(e) => { 
-            e.stopPropagation(); 
-            if (isConfirmingDelete) {
-              onDelete();
-            } else {
-              setIsConfirmingDelete(true);
-              setTimeout(() => setIsConfirmingDelete(false), 3000);
-            }
-          }}
-          className={cn(
-            "flex items-center justify-center transition-all rounded-lg shrink-0",
-            isConfirmingDelete 
-              ? "bg-red-500 text-white animate-pulse h-8 px-3 text-[10px] font-bold" 
-              : "text-studio-muted hover:text-red-400 h-8 w-8 hover:bg-red-400/10"
-          )}
-          title="Delete"
-        >
-          {isConfirmingDelete ? "CONFIRM" : <Trash2 className="w-4 h-4" />}
-        </button>
+          <button 
+            onClick={(e) => { 
+              e.stopPropagation(); 
+              if (isConfirmingDelete) {
+                onDelete();
+              } else {
+                setIsConfirmingDelete(true);
+                setTimeout(() => setIsConfirmingDelete(false), 3000);
+              }
+            }}
+            className={cn(
+              "flex items-center justify-center transition-all rounded-lg shrink-0 overflow-hidden",
+              isConfirmingDelete 
+                ? "bg-red-500 text-white w-20 h-8 text-[10px] font-bold" 
+                : "text-studio-muted hover:text-red-400 h-8 w-8 hover:bg-red-400/10"
+            )}
+            title="Delete"
+          >
+            <AnimatePresence mode="wait" initial={false}>
+              {isConfirmingDelete ? (
+                <motion.span
+                  key="confirm"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                >
+                  CONFIRM
+                </motion.span>
+              ) : (
+                <motion.div
+                  key="trash"
+                  initial={{ opacity: 0, scale: 0.5 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.5 }}
+                >
+                  <Trash2 className="w-4 h-4" />
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </button>
       </div>
     </div>
   );
@@ -996,6 +1223,47 @@ function Modal({ isOpen, onClose, title, children }: { isOpen: boolean; onClose:
         </div>
       </motion.div>
     </div>
+  );
+}
+
+function AutoResizeTextarea({ value, onChange, placeholder, className, minHeight = "80px", maxHeight }: { 
+  value: string; 
+  onChange: (e: ChangeEvent<HTMLTextAreaElement>) => void; 
+  placeholder?: string;
+  className?: string;
+  minHeight?: string;
+  maxHeight?: string;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const adjustHeight = () => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      const newHeight = Math.max(textareaRef.current.scrollHeight, parseInt(minHeight));
+      if (maxHeight && newHeight > parseInt(maxHeight)) {
+        textareaRef.current.style.height = `${maxHeight}`;
+        textareaRef.current.style.overflowY = 'auto';
+      } else {
+        textareaRef.current.style.height = `${newHeight}px`;
+        textareaRef.current.style.overflowY = 'hidden';
+      }
+    }
+  };
+
+  useEffect(() => {
+    adjustHeight();
+  }, [value]);
+
+  return (
+    <textarea
+      ref={textareaRef}
+      value={value}
+      onChange={onChange}
+      onInput={adjustHeight}
+      placeholder={placeholder}
+      className={cn("w-full resize-none scrollbar-thin scrollbar-thumb-studio-border/50 scrollbar-track-transparent", className)}
+      style={{ minHeight, maxHeight }}
+    />
   );
 }
 
@@ -1150,7 +1418,14 @@ function AddTrackModal({ isOpen, onClose, projects, onSave, onBulkSave, initialT
               ) : (
                 <select 
                   value={projectId || ''} 
-                  onChange={e => setProjectId(e.target.value || null)}
+                  onChange={e => {
+                    const pid = e.target.value || null;
+                    setProjectId(pid);
+                    if (pid && !untitled) {
+                      const proj = projects.find(p => p.id === pid);
+                      if (proj?.link) setUntitled(proj.link);
+                    }
+                  }}
                   className="w-full bg-studio-raised border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent"
                 >
                   <option value="">No Project</option>
@@ -1195,7 +1470,11 @@ function AddTrackModal({ isOpen, onClose, projects, onSave, onBulkSave, initialT
                   type="range" 
                   min="0" max="100" 
                   value={pct}
-                  onChange={e => setPct(parseInt(e.target.value))}
+                  onChange={e => {
+                    const val = parseInt(e.target.value);
+                    const rounded = Math.round(val / 5) * 5;
+                    setPct(rounded);
+                  }}
                   className="w-full accent-studio-accent bg-studio-border h-1 rounded-full appearance-none cursor-pointer"
                 />
               </div>
@@ -1211,11 +1490,12 @@ function AddTrackModal({ isOpen, onClose, projects, onSave, onBulkSave, initialT
               </div>
               <div className="space-y-1.5">
                 <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Notes</label>
-                <textarea 
+                <AutoResizeTextarea 
                   value={notes} 
                   onChange={e => setNotes(e.target.value)}
-                  className="w-full bg-studio-base border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent min-h-[80px] resize-none"
+                  className="w-full bg-studio-base border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent"
                   placeholder="Notes, feedback..."
+                  maxHeight="300px"
                 />
               </div>
             </div>
@@ -1267,6 +1547,20 @@ function AddTrackModal({ isOpen, onClose, projects, onSave, onBulkSave, initialT
                   Add Track
                 </button>
               </div>
+
+              <div className="space-y-1.5 pt-2">
+                <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Link (Applied to all)</label>
+                <div className="relative">
+                  <ExternalLink className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-studio-muted" />
+                  <input 
+                    type="url" 
+                    value={untitled} 
+                    onChange={e => setUntitled(e.target.value)}
+                    className="w-full bg-studio-base border border-studio-border rounded-lg pl-9 pr-3 py-2 text-sm outline-none focus:border-studio-accent"
+                    placeholder="https://..."
+                  />
+                </div>
+              </div>
             </div>
           )}
 
@@ -1292,6 +1586,7 @@ function AddProjectModal({ isOpen, onClose, onSave, onSaveWithTracks, initialPro
   const [name, setName] = useState('');
   const [artist, setArtist] = useState('');
   const [notes, setNotes] = useState('');
+  const [link, setLink] = useState('');
   const [tracks, setTracks] = useState<string[]>(['']);
   const [trackCountInput, setTrackCountInput] = useState('1');
 
@@ -1300,11 +1595,13 @@ function AddProjectModal({ isOpen, onClose, onSave, onSaveWithTracks, initialPro
       setName(initialProject.name);
       setArtist(initialProject.artist);
       setNotes(initialProject.notes);
+      setLink(initialProject.link || '');
       setActiveTab('project');
     } else {
       setName('');
       setArtist('');
       setNotes('');
+      setLink('');
       setTracks(['']);
       setTrackCountInput('1');
       setActiveTab('project');
@@ -1332,13 +1629,13 @@ function AddProjectModal({ isOpen, onClose, onSave, onSaveWithTracks, initialPro
     if (!name.trim()) return;
     
     if (initialProject) {
-      onSave({ name, artist, notes });
+      onSave({ name, artist, notes, link });
     } else {
       if (activeTab === 'single') {
-        onSaveWithTracks({ name, artist, notes }, name.trim() ? [name] : []);
+        onSaveWithTracks({ name, artist, notes, link }, name.trim() ? [name] : []);
       } else {
         const validTracks = tracks.filter(t => t.trim());
-        onSaveWithTracks({ name, artist, notes }, validTracks);
+        onSaveWithTracks({ name, artist, notes, link }, validTracks);
       }
     }
     onClose();
@@ -1422,6 +1719,21 @@ function AddProjectModal({ isOpen, onClose, onSave, onSaveWithTracks, initialPro
             </div>
           </div>
 
+          <div className="space-y-1.5">
+            <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Project Link (Quick Listen)</label>
+            <div className="relative">
+              <ExternalLink className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-studio-muted" />
+              <input 
+                type="url" 
+                value={link} 
+                onChange={e => setLink(e.target.value)}
+                className="w-full bg-studio-raised border border-studio-border rounded-lg pl-9 pr-3 py-2 text-sm outline-none focus:border-studio-accent"
+                placeholder="https://soundcloud.com/..."
+              />
+            </div>
+          </div>
+
+
           {!initialProject && activeTab === 'project' && (
             <div className="space-y-4 pt-4 border-t border-studio-border">
               <div className="space-y-1.5 p-3 bg-studio-accent/5 border border-studio-accent/10 rounded-xl">
@@ -1477,11 +1789,12 @@ function AddProjectModal({ isOpen, onClose, onSave, onSaveWithTracks, initialPro
 
           <div className="space-y-1.5">
             <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Project Notes</label>
-            <textarea 
+            <AutoResizeTextarea 
               value={notes} 
               onChange={e => setNotes(e.target.value)}
-              className="w-full bg-studio-raised border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent min-h-[80px] resize-none"
+              className="w-full bg-studio-raised border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent"
               placeholder="Vision, deadlines, etc..."
+              maxHeight="300px"
             />
           </div>
 

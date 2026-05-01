@@ -42,10 +42,11 @@ service cloud.firestore {
         && data.ownerId == request.auth.uid
         && data.pct is number && data.pct >= 0 && data.pct <= 100
         && data.done is bool
-        && (data.artist == null || (data.artist is string && data.artist.size() <= 200))
-        && (data.projectId == null || isValidId(data.projectId))
-        && (data.notes == null || (data.notes is string && data.notes.size() <= 2000))
-        && (data.untitled == null || (data.untitled is string && data.untitled.size() <= 500));
+        && (data.get('order', 0) is number)
+        && (data.artist == null || data.artist == "" || (data.artist is string && data.artist.size() <= 200))
+        && (data.projectId == null || data.projectId == "" || isValidId(data.projectId))
+        && (data.notes == null || data.notes == "" || (data.notes is string && data.notes.size() <= 2000))
+        && (data.untitled == null || data.untitled == "" || (data.untitled is string && data.untitled.size() <= 500));
     }
 
     // --- Collection Matches ---
@@ -84,7 +85,7 @@ service cloud.firestore {
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time
         // Relational check: project must exist if set (using existsAfter to support batches)
-        && (incoming().projectId == null || existsAfter(/databases/$(database)/documents/projects/$(incoming().projectId)));
+        && (incoming().projectId == null || incoming().projectId == "" || existsAfter(/databases/$(database)/documents/projects/$(incoming().projectId)));
 
       allow update: if isSignedIn()
         && isOwner(existing())
@@ -93,11 +94,11 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && isValidTrack(incoming())
         && (
-          // Action: Update progress/notes
-          incoming().diff(existing()).affectedKeys().hasOnly(['pct', 'done', 'notes', 'title', 'artist', 'projectId', 'untitled', 'updatedAt'])
+          // Action: Update progress/notes/order
+          incoming().diff(existing()).affectedKeys().hasOnly(['pct', 'done', 'notes', 'title', 'artist', 'projectId', 'untitled', 'updatedAt', 'order'])
         )
         // Relational check: project must exist if changing (using existsAfter to support batches)
-        && (incoming().projectId == null || existsAfter(/databases/$(database)/documents/projects/$(incoming().projectId)));
+        && (incoming().projectId == null || incoming().projectId == "" || existsAfter(/databases/$(database)/documents/projects/$(incoming().projectId)));
 
       allow delete: if isSignedIn() && isOwner(existing());
     }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, ReactNode, FormEvent } from 'react';
-import { Plus, Download, Archive, FolderKanban, Layers, Filter, X, ExternalLink, GripVertical, CheckCircle2, RotateCcw, Trash2, Edit3, Music, LogIn, LogOut, User as UserIcon } from 'lucide-react';
+import { Plus, Download, Archive, FolderKanban, Layers, Filter, X, ExternalLink, GripVertical, CheckCircle2, RotateCcw, Trash2, Edit3, Music, LogIn, LogOut, User as UserIcon, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence, Reorder } from 'motion/react';
 import { cn } from './lib/utils.ts';
 import { Track, Project } from './types.ts';
@@ -270,6 +270,49 @@ export default function App() {
     setProjects(_newProjects);
   };
 
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-studio-bg flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-studio-accent animate-spin" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-studio-bg flex flex-col items-center justify-center p-6 text-center">
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="mb-8"
+        >
+          <div className="relative inline-block">
+            <Layers className="w-16 h-16 text-studio-accent mx-auto mb-4" />
+            <motion.div 
+              animate={{ rotate: 360 }}
+              transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
+              className="absolute -top-1 -right-1 w-6 h-6 border-2 border-studio-accent/20 rounded-full border-t-studio-accent"
+            />
+          </div>
+          <h1 className="text-4xl font-bold tracking-tight mb-2">paprwrk</h1>
+          <p className="text-studio-muted text-sm max-w-[280px] mx-auto">The technical workspace for music producers. Port your projects from Untitled and organize your studio flow.</p>
+        </motion.div>
+        
+        <button 
+          onClick={loginWithGoogle}
+          className="flex items-center gap-3 px-8 py-4 bg-white text-black font-bold rounded-xl hover:opacity-90 transition-all shadow-xl shadow-white/5 active:scale-95 group"
+        >
+          <LogIn className="w-5 h-5 transition-transform group-hover:translate-x-1" />
+          Sign in with Google
+        </button>
+        
+        <p className="mt-12 text-[10px] text-studio-muted uppercase tracking-widest max-w-xs font-bold opacity-50">
+          Built for producers • Cloud Synced • Technical Track Workspace
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen font-sans selection:bg-studio-accent selection:text-studio-bg">
       {/* Header */}
@@ -288,6 +331,12 @@ export default function App() {
             >
               <Plus className="w-3.5 h-3.5" />
               <span>NEW</span>
+            </button>
+            <button 
+              onClick={logout}
+              className="p-2 text-studio-muted hover:text-studio-accent transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -315,14 +364,22 @@ export default function App() {
               </button>
             ))}
           </nav>
-
-          <div className="hidden md:flex items-center gap-2">
+ 
+          <div className="hidden md:flex items-center gap-3">
             <button 
               onClick={() => { setEditingTrack(null); setIsAddTrackOpen(true); }}
               className="flex items-center gap-2 px-4 py-2 text-sm font-bold bg-studio-accent text-studio-bg rounded-lg hover:opacity-90 transition-opacity shadow-lg shadow-studio-accent/20"
             >
               <Plus className="w-4 h-4" />
               <span>ADD TRACKS</span>
+            </button>
+            <div className="h-8 w-[1px] bg-studio-border mx-1" />
+            <button 
+              onClick={logout}
+              title="Sign out"
+              className="flex items-center gap-2 p-2 text-studio-muted hover:text-red-400 transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
             </button>
           </div>
         </div>

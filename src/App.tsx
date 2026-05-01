@@ -173,8 +173,10 @@ export default function App() {
 
   const filteredTracks = useMemo(() => {
     let result = tracks.filter(t => {
-      if (activeTab === 'stack' && t.done) return false;
-      if (activeTab === 'archive' && !t.done) return false;
+      // Explicitly handle 'done' as a boolean check
+      const isActuallyDone = t.done === true;
+      if (activeTab === 'stack' && isActuallyDone) return false;
+      if (activeTab === 'archive' && !isActuallyDone) return false;
       
       const artistMatch = !filterArtist || getArtist(t) === filterArtist;
       const projectMatch = filterProject === null || t.projectId === filterProject;
@@ -182,12 +184,11 @@ export default function App() {
       return artistMatch && projectMatch;
     });
 
-    // Default sort by created date (older first, new at bottom)
-    return result.sort((a, b) => {
-      // For pending writes, createdAt might be null or missing seconds
-      // Using MAX_SAFE_INTEGER ensures new/pending writes go to the bottom in ascending order
-      const timeA = a.createdAt?.seconds ?? Number.MAX_SAFE_INTEGER;
-      const timeB = b.createdAt?.seconds ?? Number.MAX_SAFE_INTEGER;
+    // Sort: Older first, Newest at bottom
+    return [...result].sort((a, b) => {
+      // Use estimated server timestamp if available, else push to bottom
+      const timeA = a.createdAt?.seconds ?? (a.createdAt?.toMillis?.() / 1000) ?? Number.MAX_SAFE_INTEGER;
+      const timeB = b.createdAt?.seconds ?? (b.createdAt?.toMillis?.() / 1000) ?? Number.MAX_SAFE_INTEGER;
       
       if (timeA !== timeB) return timeA - timeB;
       return a.title.localeCompare(b.title);

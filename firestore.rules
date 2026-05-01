@@ -82,8 +82,8 @@ service cloud.firestore {
       allow create: if isSignedIn()
         && isValidId(trackId)
         && isValidTrack(incoming())
-        // Relational check: project must exist if set
-        && (incoming().projectId == null || exists(/databases/$(database)/documents/projects/$(incoming().projectId)));
+        // Relational check: project must exist if set (using existsAfter to support batches)
+        && (incoming().projectId == null || existsAfter(/databases/$(database)/documents/projects/$(incoming().projectId)));
 
       allow update: if isSignedIn()
         && isOwner(existing())
@@ -94,8 +94,8 @@ service cloud.firestore {
           // Action: Update progress/notes
           incoming().diff(existing()).affectedKeys().hasOnly(['pct', 'done', 'notes', 'title', 'artist', 'projectId', 'untitled', 'updatedAt'])
         )
-        // Relational check: project must exist if changing
-        && (incoming().projectId == null || exists(/databases/$(database)/documents/projects/$(incoming().projectId)));
+        // Relational check: project must exist if changing (using existsAfter to support batches)
+        && (incoming().projectId == null || existsAfter(/databases/$(database)/documents/projects/$(incoming().projectId)));
 
       allow delete: if isSignedIn() && isOwner(existing());
     }

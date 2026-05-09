@@ -1,0 +1,17 @@
+{
+  "name": "paprwrk",
+  "short_name": "paprwrk",
+  "description": "A technical track workspace for music producers.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#facc15",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

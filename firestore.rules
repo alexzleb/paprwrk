@@ -43,6 +43,7 @@ service cloud.firestore {
         && data.pct is number && data.pct >= 0 && data.pct <= 100
         && data.done is bool
         && (data.get('order', 0) is number)
+        && (data.get('hidden', false) is bool)
         && (data.artist == null || data.artist == "" || (data.artist is string && data.artist.size() <= 200))
         && (data.projectId == null || data.projectId == "" || isValidId(data.projectId))
         && (data.notes == null || data.notes == "" || (data.notes is string && data.notes.size() <= 2000))
@@ -94,8 +95,8 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && isValidTrack(incoming())
         && (
-          // Action: Update progress/notes/order
-          incoming().diff(existing()).affectedKeys().hasOnly(['pct', 'done', 'notes', 'title', 'artist', 'projectId', 'untitled', 'updatedAt', 'order'])
+          // Action: Update progress/notes/order/hidden
+          incoming().diff(existing()).affectedKeys().hasOnly(['pct', 'done', 'notes', 'title', 'artist', 'projectId', 'untitled', 'updatedAt', 'order', 'hidden'])
         )
         // Relational check: project must exist if changing (using existsAfter to support batches)
         && (incoming().projectId == null || incoming().projectId == "" || existsAfter(/databases/$(database)/documents/projects/$(incoming().projectId)));

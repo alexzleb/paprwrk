@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, ReactNode, FormEvent, useRef, ChangeEvent } from 'react';
-import { Plus, Download, Archive, FolderKanban, Layers, Filter, X, ExternalLink, GripVertical, CheckCircle2, RotateCcw, Trash2, Edit3, Music, LogIn, LogOut, User as UserIcon, Loader2, GripHorizontal, ChevronDown, Headphones } from 'lucide-react';
+import { useState, useEffect, useMemo, ReactNode, FormEvent, useRef, ChangeEvent, RefObject } from 'react';
+import { Plus, Download, Archive, FolderKanban, Layers, Filter, X, ExternalLink, GripVertical, CheckCircle2, RotateCcw, Trash2, Edit3, Music, LogIn, LogOut, User as UserIcon, Loader2, GripHorizontal, ChevronDown, Headphones, Eye, EyeOff } from 'lucide-react';
 import { motion, AnimatePresence, Reorder, useDragControls } from 'motion/react';
 import { cn } from './lib/utils.ts';
 import { Track, Project } from './types.ts';
@@ -35,6 +35,8 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<'stack' | 'projects' | 'archive'>('stack');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [hiddenSectionOpen, setHiddenSectionOpen] = useState(false);
+  const [draggedTrackId, setDraggedTrackId] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filterArtist, setFilterArtist] = useState('');
   const [filterProject, setFilterProject] = useState<string | null>(null);
@@ -134,8 +136,14 @@ export default function App() {
       return artistMatch && projectMatch;
     });
 
-    // Sort: Older first, Newest at bottom
+    // Sort: Hidden items always go at the bottom in the stack view
     const sorted = [...result].sort((a, b) => {
+      if (activeTab === 'stack') {
+        const isAHidden = a.hidden === true;
+        const isBHidden = b.hidden === true;
+        if (isAHidden !== isBHidden) return isAHidden ? 1 : -1;
+      }
+
       const orderA = a.order ?? 0;
       const orderB = b.order ?? 0;
       if (orderA !== orderB) return orderA - orderB;
@@ -362,7 +370,7 @@ export default function App() {
   return (
     <div className="min-h-screen font-sans selection:bg-studio-accent selection:text-studio-bg">
       {/* Header */}
-      <header className="sticky top-0 z-40 bg-studio-bg/80 backdrop-blur-md border-b border-studio-border px-4 md:px-6 py-3 md:py-4 flex flex-col md:flex-row items-center justify-between gap-4 md:gap-0">
+      <header className="sticky top-0 z-40 bg-studio-bg/80 backdrop-blur-md border-b border-studio-border px-4 md:px-6 py-3 md:pt-7 md:pb-5 flex flex-col md:flex-row items-center justify-between gap-4 md:gap-0">
         {syncError && (
           <div className="absolute top-full left-0 right-0 bg-red-500/10 border-b border-red-500/20 py-1.5 px-4 text-[10px] text-red-400 font-bold text-center animate-pulse">
             {syncError}
@@ -524,36 +532,96 @@ export default function App() {
               </AnimatePresence>
 
               {/* Stack List */}
-              <Reorder.Group 
-                axis="y" 
-                values={filteredTracks} 
-                onReorder={reorderTracks}
-                className="space-y-3"
-              >
-                {filteredTracks.map((track, i) => (
-                  <DraggableTrackItem 
-                    key={track.id}
-                    track={track} 
-                    index={i} 
-                    project={track.projectId ? projectsMap[track.projectId] : undefined}
-                    artist={getArtist(track)}
-                    onUpdate={(u) => updateTrack(track.id, u)}
-                    onDelete={() => deleteTrack(track.id)}
-                    onEdit={() => { setEditingTrack(track); setIsAddTrackOpen(true); }}
-                    isTop={i === 0 && !filterArtist && !filterProject}
-                    isExpanded={expandedId === track.id}
-                    onToggle={() => setExpandedId(expandedId === track.id ? null : track.id)}
-                  />
-                ))}
-              </Reorder.Group>
-              {filteredTracks.length === 0 && (
-                  <div className="py-20 text-center border border-dashed border-studio-border rounded-2xl">
-                    <Layers className="w-10 h-10 text-studio-muted mx-auto mb-3 opacity-20" />
-                    <p className="text-studio-muted text-sm px-10">
-                      {tracksLoaded ? "No music in this view yet." : "Syncing your studio..."}
-                    </p>
+              <div className="space-y-8">
+                <div>
+                  <Reorder.Group 
+                    axis="y" 
+                    values={filteredTracks.filter(t => !t.hidden)} 
+                    onReorder={(newOrder) => {
+                      const hidden = tracks.filter(t => t.hidden && !t.done);
+                      reorderTracks([...newOrder, ...hidden]);
+                    }}
+                    className="space-y-3"
+                  >
+                    {filteredTracks.filter(t => !t.hidden).map((track, i) => (
+                      <DraggableTrackItem 
+                        key={track.id}
+                        track={track} 
+                        index={i} 
+                        project={track.projectId ? projectsMap[track.projectId] : undefined}
+                        artist={getArtist(track)}
+                        onUpdate={(u) => updateTrack(track.id, u)}
+                        onDelete={() => deleteTrack(track.id)}
+                        onEdit={() => { setEditingTrack(track); setIsAddTrackOpen(true); }}
+                        isTop={i === 0 && !filterArtist && !filterProject}
+                        isExpanded={expandedId === track.id}
+                        onToggle={() => setExpandedId(expandedId === track.id ? null : track.id)}
+                        onDragStart={() => setDraggedTrackId(track.id)}
+                        onDragEnd={() => setDraggedTrackId(null)}
+                      />
+                    ))}
+                  </Reorder.Group>
+                  {filteredTracks.filter(t => !t.hidden).length === 0 && (
+                    <div className="py-20 text-center border border-dashed border-studio-border rounded-2xl">
+                      <Layers className="w-10 h-10 text-studio-muted mx-auto mb-3 opacity-20" />
+                      <p className="text-studio-muted text-sm px-10">
+                        {tracksLoaded ? "No music in this view yet." : "Syncing your studio..."}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {filteredTracks.some(t => t.hidden) && (
+                  <div className="space-y-4">
+                    <button 
+                      onClick={() => setHiddenSectionOpen(!hiddenSectionOpen)}
+                      className="flex items-center gap-2 text-xs font-bold text-studio-muted hover:text-studio-text transition-colors group"
+                    >
+                      <ChevronDown className={cn("w-3 h-3 transition-transform", hiddenSectionOpen ? "rotate-0" : "-rotate-90")} />
+                      <span className="uppercase tracking-widest">Hidden Tracks ({filteredTracks.filter(t => t.hidden).length})</span>
+                    </button>
+                    
+                    <AnimatePresence>
+                      {hiddenSectionOpen && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="overflow-hidden"
+                        >
+                          <Reorder.Group 
+                            axis="y" 
+                            values={filteredTracks.filter(t => t.hidden)} 
+                            onReorder={(newOrder) => {
+                              const active = tracks.filter(t => !t.hidden && !t.done);
+                              reorderTracks([...active, ...newOrder]);
+                            }}
+                            className="space-y-3 pt-2"
+                          >
+                            {filteredTracks.filter(t => t.hidden).map((track, i) => (
+                              <DraggableTrackItem 
+                                key={track.id}
+                                track={track} 
+                                index={i} 
+                                project={track.projectId ? projectsMap[track.projectId] : undefined}
+                                artist={getArtist(track)}
+                                onUpdate={(u) => updateTrack(track.id, u)}
+                                onDelete={() => deleteTrack(track.id)}
+                                onEdit={() => { setEditingTrack(track); setIsAddTrackOpen(true); }}
+                                isTop={false}
+                                isExpanded={expandedId === track.id}
+                                onToggle={() => setExpandedId(expandedId === track.id ? null : track.id)}
+                                onDragStart={() => setDraggedTrackId(track.id)}
+                                onDragEnd={() => setDraggedTrackId(null)}
+                              />
+                            ))}
+                          </Reorder.Group>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
                 )}
+              </div>
             </motion.div>
           )}
 
@@ -643,50 +711,6 @@ export default function App() {
           onClose={() => setIsAddTrackOpen(false)} 
           projects={projects}
           onSave={editingTrack ? (t) => updateTrack(editingTrack.id, t) : addTrack}
-          onBulkSave={async (bulkTracksData, projectName, artist) => {
-            if (!user) return;
-            try {
-              const batch = writeBatch(db);
-              let currentProjectId: string | null = null;
-
-              if (projectName) {
-                const existing = projects.find(p => p.name.toLowerCase() === projectName.toLowerCase());
-                if (existing) {
-                  currentProjectId = existing.id;
-                } else {
-                  const newProjRef = doc(collection(db, 'projects'));
-                  currentProjectId = newProjRef.id;
-                  const maxProjOrder = projects.reduce((max, pr) => Math.max(max, pr.order || 0), 0);
-                  batch.set(newProjRef, {
-                    name: projectName,
-                    artist: artist || '',
-                    notes: '',
-                    order: maxProjOrder + 1,
-                    ownerId: user.uid,
-                    createdAt: serverTimestamp(),
-                    updatedAt: serverTimestamp()
-                  });
-                }
-              }
-              
-              bulkTracksData.forEach((t, idx) => {
-                const newTrackRef = doc(collection(db, 'tracks'));
-                const maxOrder = tracks.reduce((max, tr) => Math.max(max, tr.order || 0), 0);
-                batch.set(newTrackRef, {
-                  ...t,
-                  order: maxOrder + idx + 1,
-                  projectId: currentProjectId,
-                  ownerId: user.uid,
-                  createdAt: serverTimestamp(),
-                  updatedAt: serverTimestamp()
-                });
-              });
-
-              await batch.commit();
-            } catch (err) {
-              handleFirestoreError(err, OperationType.WRITE, 'bulkAddTracks');
-            }
-          }}
           initialTrack={editingTrack}
         />
 
@@ -701,7 +725,7 @@ export default function App() {
               const newProjRef = doc(collection(db, 'projects'));
               const projectId = newProjRef.id;
 
-              const maxProjOrder = projects.reduce((max, tr) => Math.max(max, tr.order || 0), 0);
+              const maxProjOrder = projects.reduce((max, pr) => Math.max(max, pr.order || 0), 0);
               batch.set(newProjRef, {
                 ...project,
                 order: maxProjOrder + 1,
@@ -735,6 +759,23 @@ export default function App() {
           }}
           initialProject={editingProject}
         />
+
+        {/* Drag Feedback */}
+        <AnimatePresence shadow-sm>
+          {draggedTrackId && (
+            <motion.div 
+              initial={{ y: 100, opacity: 0, x: '-50%' }}
+              animate={{ y: 0, opacity: 1, x: '-50%' }}
+              exit={{ y: 100, opacity: 0, x: '-50%' }}
+              className="fixed bottom-12 left-1/2 z-50 pointer-events-none"
+            >
+              <div className="bg-studio-accent text-studio-bg px-6 py-3 rounded-full font-bold shadow-2xl flex items-center gap-3 border-2 border-white/20">
+                <EyeOff className="w-5 h-5" />
+                <span className="text-sm uppercase tracking-wider font-extrabold">Hide</span>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </main>
     </div>
   );
@@ -750,7 +791,9 @@ function DraggableTrackItem({
   onEdit, 
   isTop, 
   isExpanded, 
-  onToggle 
+  onToggle,
+  onDragStart,
+  onDragEnd
 }: {
   track: Track;
   index: number;
@@ -762,30 +805,34 @@ function DraggableTrackItem({
   isTop: boolean;
   isExpanded: boolean;
   onToggle: () => void;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
   key?: string | number;
 }) {
   const dragControls = useDragControls();
-  const [isDragging, setIsDragging] = useState(false);
 
   return (
     <Reorder.Item 
       value={track}
       dragListener={false}
       dragControls={dragControls}
-      onDragStart={() => setIsDragging(true)}
-      onDragEnd={() => setIsDragging(false)}
+      onDragStart={onDragStart}
+      onDragEnd={(e, info) => {
+        if (onDragEnd) onDragEnd();
+        // Detect if dropped near bottom of screen (viewport relative)
+        const viewportY = info.point.y - window.scrollY;
+        if (viewportY > window.innerHeight - 100) {
+          onUpdate({ hidden: !track.hidden });
+        }
+      }}
       whileDrag={{ 
         zIndex: 100,
-        scale: 1.01,
         boxShadow: "0 25px 50px -12px rgb(0 0 0 / 0.5)",
+        backgroundColor: "#151719",
+        borderRadius: "0.75rem",
+        opacity: 1
       }}
-      className={cn(
-        "relative select-none",
-        isDragging ? "z-50" : "z-0"
-      )}
-      style={{
-        backgroundColor: isDragging ? "#151719" : "transparent"
-      }}
+      className="relative select-none w-full z-0"
     >
       <TrackCard 
         track={track} 
@@ -820,20 +867,43 @@ function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, 
 }) {
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const [localPct, setLocalPct] = useState(track.pct);
+  const [localNotes, setLocalNotes] = useState(track.notes);
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     setLocalPct(track.pct);
   }, [track.pct]);
 
+  useEffect(() => {
+    // Only update local notes if the user is not currently typing (to avoid cursor jumps)
+    if (document.activeElement !== textareaRef.current) {
+      setLocalNotes(track.notes);
+    }
+  }, [track.notes]);
+
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
+  }, []);
+
+  const handleNotesChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
+    const newNotes = e.target.value;
+    setLocalNotes(newNotes);
+    
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      onUpdate({ notes: newNotes });
+    }, 1000);
+  };
+
   const listenLink = track.untitled || project?.link;
 
   return (
-    <motion.div 
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.95 }}
+    <div 
       className={cn(
-        "bg-studio-base border rounded-xl overflow-hidden shadow-sm transition-all hover:border-white/20 active:ring-1 active:ring-white/10",
+        "bg-studio-base border rounded-xl overflow-hidden shadow-sm transition-colors hover:border-white/20 active:ring-1 active:ring-white/10",
         isExpanded ? "border-white/20" : "border-studio-border",
         isTop && !isExpanded && "border-studio-accent/50 ring-1 ring-studio-accent/20"
       )}
@@ -853,6 +923,7 @@ function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, 
             e.stopPropagation();
             dragControls.start(e);
           }}
+          onClick={(e) => e.stopPropagation()}
           className="text-studio-muted hover:text-studio-text cursor-grab active:cursor-grabbing shrink-0 p-2 relative z-20 flex items-center justify-center touch-none"
         >
           <GripVertical className="w-5 h-5" />
@@ -940,8 +1011,9 @@ function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, 
             <div className="space-y-1.5">
               <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Notes</label>
               <AutoResizeTextarea 
-                value={track.notes}
-                onChange={(e) => onUpdate({ notes: e.target.value })}
+                textareaRef={textareaRef}
+                value={localNotes}
+                onChange={handleNotesChange}
                 placeholder="Session thoughts, mix notes, or next steps..."
                 className="w-full bg-studio-base border border-studio-border rounded-lg p-3 text-sm outline-none focus:border-studio-accent transition-colors"
                 minHeight="80px"
@@ -956,6 +1028,13 @@ function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, 
                   title="Mark Done"
                 >
                   <CheckCircle2 className="w-4 h-4" />
+                </button>
+                <button 
+                  onClick={() => onUpdate({ hidden: !track.hidden })}
+                  className="p-2 text-studio-muted hover:text-studio-accent hover:bg-studio-accent/10 rounded-lg transition-colors"
+                  title={track.hidden ? "Show in Stack" : "Hide from Stack"}
+                >
+                  {track.hidden ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
                 </button>
                 <button 
                   onClick={onEdit}
@@ -1024,7 +1103,7 @@ function TrackCard({ track, index, project, artist, onUpdate, onDelete, onEdit, 
       </motion.div>
     )}
   </AnimatePresence>
-</motion.div>
+    </div>
   );
 }
 
@@ -1045,27 +1124,20 @@ function DraggableProjectItem({
   key?: string | number;
 }) {
   const dragControls = useDragControls();
-  const [isDragging, setIsDragging] = useState(false);
 
   return (
     <Reorder.Item 
       value={project}
       dragListener={false}
       dragControls={dragControls}
-      onDragStart={() => setIsDragging(true)}
-      onDragEnd={() => setIsDragging(false)}
       whileDrag={{ 
         zIndex: 100,
-        scale: 1.01,
         boxShadow: "0 25px 50px -12px rgb(0 0 0 / 0.5)",
+        backgroundColor: "#151719",
+        borderRadius: "0.75rem",
+        opacity: 1
       }}
-      className={cn(
-        "relative select-none",
-        isDragging ? "z-50" : "z-0"
-      )}
-      style={{
-        backgroundColor: isDragging ? "#151719" : "transparent"
-      }}
+      className="relative select-none w-full z-0"
     >
       <ProjectCard 
         project={project}
@@ -1096,12 +1168,9 @@ function ProjectCard({ project, tracks, onEdit, onDelete, isExpanded, onToggle, 
     : 0;
 
   return (
-    <motion.div 
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.95 }}
+    <div 
       className={cn(
-        "bg-studio-base border rounded-xl overflow-hidden shadow-sm transition-all hover:border-white/20 active:ring-1 active:ring-white/10",
+        "bg-studio-base border rounded-xl overflow-hidden shadow-sm transition-colors hover:border-white/20 active:ring-1 active:ring-white/10",
         isExpanded ? "border-white/20 shadow-lg" : "border-studio-border"
       )}
     >
@@ -1119,6 +1188,7 @@ function ProjectCard({ project, tracks, onEdit, onDelete, isExpanded, onToggle, 
             e.stopPropagation();
             dragControls.start(e);
           }}
+          onClick={(e) => e.stopPropagation()}
           className="text-studio-muted hover:text-studio-text cursor-grab active:cursor-grabbing shrink-0 p-2 relative z-20 flex items-center justify-center touch-none self-center"
         >
           <GripVertical className="w-5 h-5" />
@@ -1263,7 +1333,7 @@ function ProjectCard({ project, tracks, onEdit, onDelete, isExpanded, onToggle, 
           </motion.div>
         )}
       </AnimatePresence>
-    </motion.div>
+    </div>
   );
 }
 
@@ -1385,16 +1455,17 @@ function Modal({ isOpen, onClose, title, children }: { isOpen: boolean; onClose:
         className="absolute inset-0 bg-black/60 backdrop-blur-sm" 
       />
       <motion.div 
-        initial={{ opacity: 0, y: 100, scale: 1 }}
+        initial={{ opacity: 0, y: "100%", scale: 1 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 100, scale: 1 }}
-        className="relative bg-studio-base border-t sm:border border-studio-border rounded-t-2xl sm:rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden"
+        exit={{ opacity: 0, y: "100%", scale: 1 }}
+        transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+        className="relative bg-studio-base border-t sm:border border-studio-border rounded-t-3xl sm:rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden max-h-[92vh] flex flex-col"
       >
-        <div className="px-5 md:px-6 py-4 border-b border-studio-border flex items-center justify-between">
-          <h2 className="font-medium">{title}</h2>
-          <button onClick={onClose} className="p-1 text-studio-muted hover:text-studio-text"><X className="w-5 h-5" /></button>
+        <div className="px-5 md:px-6 py-4 border-b border-studio-border flex items-center justify-between shrink-0">
+          <h2 className="font-semibold text-base tracking-tight">{title}</h2>
+          <button onClick={onClose} className="p-2 -mr-2 text-studio-muted hover:text-studio-text transition-colors"><X className="w-5 h-5" /></button>
         </div>
-        <div className="p-5 md:p-6 max-h-[85vh] overflow-y-auto">
+        <div className="p-5 md:p-6 overflow-y-auto overscroll-contain">
           {children}
         </div>
       </motion.div>
@@ -1402,27 +1473,34 @@ function Modal({ isOpen, onClose, title, children }: { isOpen: boolean; onClose:
   );
 }
 
-function AutoResizeTextarea({ value, onChange, placeholder, className, minHeight = "80px", maxHeight }: { 
+function AutoResizeTextarea({ value, onChange, placeholder, className, minHeight = "80px", maxHeight, textareaRef: externalRef }: { 
   value: string; 
   onChange: (e: ChangeEvent<HTMLTextAreaElement>) => void; 
   placeholder?: string;
   className?: string;
   minHeight?: string;
   maxHeight?: string;
+  textareaRef?: RefObject<HTMLTextAreaElement>;
 }) {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const internalRef = useRef<HTMLTextAreaElement>(null);
+  const textareaRef = externalRef || internalRef;
 
   const adjustHeight = () => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      const newHeight = Math.max(textareaRef.current.scrollHeight, parseInt(minHeight));
+    const node = textareaRef.current;
+    if (node) {
+      const scrollPos = window.scrollY;
+      node.style.height = 'auto';
+      const newHeight = Math.max(node.scrollHeight, parseInt(minHeight));
+      
       if (maxHeight && newHeight > parseInt(maxHeight)) {
-        textareaRef.current.style.height = `${maxHeight}`;
-        textareaRef.current.style.overflowY = 'auto';
+        node.style.height = `${maxHeight}`;
+        node.style.overflowY = 'auto';
       } else {
-        textareaRef.current.style.height = `${newHeight}px`;
-        textareaRef.current.style.overflowY = 'hidden';
+        node.style.height = `${newHeight}px`;
+        node.style.overflowY = 'hidden';
       }
+      // Prevent page jump
+      window.scrollTo(window.scrollX, scrollPos);
     }
   };
 
@@ -1443,310 +1521,149 @@ function AutoResizeTextarea({ value, onChange, placeholder, className, minHeight
   );
 }
 
-function AddTrackModal({ isOpen, onClose, projects, onSave, onBulkSave, initialTrack }: { 
+function AddTrackModal({ isOpen, onClose, projects, onSave, initialTrack }: { 
   isOpen: boolean; 
   onClose: () => void; 
   projects: Project[];
   onSave: (track: any) => void;
-  onBulkSave: (tracks: any[], projectName: string, artist: string) => void;
   initialTrack: Track | null;
 }) {
-  const [activeTab, setActiveTab] = useState<'single' | 'project'>('single');
   const [title, setTitle] = useState('');
   const [artist, setArtist] = useState('');
-  const [projectName, setProjectName] = useState('');
   const [projectId, setProjectId] = useState<string | null>(null);
   const [pct, setPct] = useState(0);
   const [notes, setNotes] = useState('');
   const [untitled, setUntitled] = useState('');
-  const [bulkTracks, setBulkTracks] = useState<string[]>(['']);
-  const [trackCountInput, setTrackCountInput] = useState('1');
 
   useEffect(() => {
     if (initialTrack) {
       setTitle(initialTrack.title);
       setArtist(initialTrack.artist);
-      setProjectId(initialTrack.projectId);
+      setProjectId(initialTrack.projectId || null);
       setPct(initialTrack.pct);
       setNotes(initialTrack.notes);
       setUntitled(initialTrack.untitled);
-      setActiveTab('single');
     } else {
       setTitle('');
       setArtist('');
-      setProjectName('');
       setProjectId(null);
       setPct(0);
       setNotes('');
       setUntitled('');
-      setBulkTracks(['']);
-      setTrackCountInput('1');
-      setActiveTab('single');
     }
   }, [initialTrack, isOpen]);
 
-  const handleTrackCountChange = (val: string) => {
-    setTrackCountInput(val);
-    const count = parseInt(val);
-    if (!isNaN(count) && count >= 1 && count <= 50) {
-      setBulkTracks(prev => {
-        const next = [...prev];
-        if (count > next.length) {
-          return [...next, ...Array(count - next.length).fill('')];
-        } else if (count < next.length) {
-          return next.slice(0, count);
-        }
-        return next;
-      });
-    }
-  };
-
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (activeTab === 'single' || initialTrack) {
-      if (!title.trim()) return;
-      
-      onSave({ 
-        title: title.trim(), 
-        artist: artist.trim(), 
-        projectId, 
-        pct, 
-        notes: notes.trim(), 
-        untitled: untitled.trim(), 
-        done: false 
-      });
-    } else {
-      const titles = bulkTracks.filter(t => t.trim());
-      if (titles.length === 0) return;
-      
-      const tracks = titles.map(t => ({
-        title: t.trim(),
-        artist: artist.trim(),
-        projectId: projectId,
-        pct: 0,
-        notes: '',
-        untitled: untitled.trim(),
-        done: false
-      }));
-      
-      onBulkSave(tracks, projectName.trim(), artist.trim());
-    }
+    if (!title.trim()) return;
+    
+    onSave({ 
+      title: title.trim(), 
+      artist: artist.trim(), 
+      projectId: projectId || "", 
+      pct, 
+      notes: notes.trim(), 
+      untitled: untitled.trim(), 
+      done: false 
+    });
     onClose();
   };
 
   const selectedProject = projectId ? projects.find(p => p.id === projectId) : null;
   const inheritedArtist = selectedProject?.artist || '';
 
-  const addRow = () => setBulkTracks([...bulkTracks, '']);
-  const updateRow = (i: number, v: string) => {
-    const next = [...bulkTracks];
-    next[i] = v;
-    setBulkTracks(next);
-  };
-  const removeRow = (i: number) => {
-    if (bulkTracks.length > 1) {
-      setBulkTracks(bulkTracks.filter((_, idx) => idx !== i));
-    }
-  };
-
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={initialTrack ? "Edit Track" : "Add Music"}>
-      <div className="space-y-6">
-        {!initialTrack && (
-          <div className="flex bg-studio-base p-1 rounded-lg border border-studio-border">
-            <button 
-              type="button"
-              onClick={() => setActiveTab('single')}
-              className={cn(
-                "flex-1 py-1.5 text-[10px] font-bold rounded-md transition-all flex items-center justify-center gap-2 uppercase tracking-wider",
-                activeTab === 'single' ? "bg-studio-raised text-studio-accent shadow-sm border border-studio-border" : "text-studio-muted hover:text-studio-text"
-              )}
+    <Modal isOpen={isOpen} onClose={onClose} title={initialTrack ? "Edit Track" : "Add Track"}>
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-1.5 flex-1">
+            <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold block">Assign to Project</label>
+            <select 
+              value={projectId || ''} 
+              onChange={e => {
+                const pid = e.target.value || null;
+                setProjectId(pid);
+                if (pid && !untitled) {
+                  const proj = projects.find(p => p.id === pid);
+                  if (proj?.link) setUntitled(proj.link);
+                }
+              }}
+              className="w-full bg-studio-raised border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent"
             >
-              <Music className="w-3 h-3" />
-              Single
-            </button>
-            <button 
-              type="button"
-              onClick={() => setActiveTab('project')}
-              className={cn(
-                "flex-1 py-1.5 text-[10px] font-bold rounded-md transition-all flex items-center justify-center gap-2 uppercase tracking-wider",
-                activeTab === 'project' ? "bg-studio-raised text-studio-text shadow-sm border border-studio-border" : "text-studio-muted hover:text-studio-text"
-              )}
-            >
-              <FolderKanban className="w-3 h-3" />
-              Project / EP
-            </button>
+              <option value="">No Project (Single)</option>
+              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
           </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5 flex-1">
-              <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold block">Project</label>
-              {activeTab === 'project' && !initialTrack ? (
-                 <input 
-                    type="text" 
-                    value={projectName} 
-                    onChange={e => setProjectName(e.target.value)}
-                    className="w-full bg-studio-raised border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent"
-                    placeholder="New or existing project"
-                 />
-              ) : (
-                <select 
-                  value={projectId || ''} 
-                  onChange={e => {
-                    const pid = e.target.value || null;
-                    setProjectId(pid);
-                    if (pid && !untitled) {
-                      const proj = projects.find(p => p.id === pid);
-                      if (proj?.link) setUntitled(proj.link);
-                    }
-                  }}
-                  className="w-full bg-studio-raised border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent"
-                >
-                  <option value="">No Project</option>
-                  {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-              )}
-            </div>
-            <div className="space-y-1.5 flex-1">
-              <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold block">Artist</label>
-              <input 
-                type="text" 
-                value={artist} 
-                onChange={e => setArtist(e.target.value)}
-                className="w-full bg-studio-raised border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent"
-                placeholder={inheritedArtist || "Artist name"}
-              />
-            </div>
+          <div className="space-y-1.5 flex-1">
+            <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold block">Artist</label>
+            <input 
+              type="text" 
+              value={artist} 
+              onChange={e => setArtist(e.target.value)}
+              className="w-full bg-studio-raised border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent"
+              placeholder={inheritedArtist || "Artist name"}
+            />
           </div>
+        </div>
 
-          {activeTab === 'single' || initialTrack ? (
-            <div className="space-y-4 pt-4 border-t border-studio-border">
-              <div className="space-y-1.5">
-                <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">
-                  {activeTab === 'single' && !projectId ? 'Title *' : 'Track Title *'}
-                </label>
-                <input 
-                  autoFocus
-                  type="text" 
-                  value={title} 
-                  onChange={e => setTitle(e.target.value)}
-                  className="w-full bg-studio-base border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent"
-                  placeholder={activeTab === 'single' && !projectId ? "e.g. Moonlight Drive" : "Track title"}
-                  required
-                />
-              </div>
-              <div className="space-y-1.5">
-                <div className="flex justify-between items-center text-[10px] font-bold uppercase tracking-widest text-studio-muted">
-                  <span>Progress</span>
-                  <span className="font-mono text-studio-text">{pct}%</span>
-                </div>
-                <input 
-                  type="range" 
-                  min="0" max="100" 
-                  value={pct}
-                  onChange={e => {
-                    const val = parseInt(e.target.value);
-                    const rounded = Math.round(val / 5) * 5;
-                    setPct(rounded);
-                  }}
-                  className="w-full accent-studio-accent bg-studio-border h-1 rounded-full appearance-none cursor-pointer"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Link (Untitled, Dropbox, etc)</label>
-                <input 
-                  type="url" 
-                  value={untitled} 
-                  onChange={e => setUntitled(e.target.value)}
-                  className="w-full bg-studio-base border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent"
-                  placeholder="https://..."
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Notes</label>
-                <AutoResizeTextarea 
-                  value={notes} 
-                  onChange={e => setNotes(e.target.value)}
-                  className="w-full bg-studio-base border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent"
-                  placeholder="Notes, feedback..."
-                  maxHeight="300px"
-                />
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-4 pt-4 border-t border-studio-border">
-              <div className="space-y-1.5 p-3 bg-studio-accent/5 border border-studio-accent/10 rounded-xl">
-                <label className="text-[10px] uppercase tracking-widest text-studio-accent font-bold block mb-1">How many tracks are you adding?</label>
-                <input 
-                  type="number" 
-                  min="1" 
-                  max="50"
-                  value={trackCountInput}
-                  onChange={e => handleTrackCountChange(e.target.value)}
-                  className="w-full bg-studio-base border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent font-mono"
-                  placeholder="Quantity (e.g. 5)"
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Track Titles</label>
-                <span className="text-[10px] font-mono text-studio-muted">{bulkTracks.length} total</span>
-              </div>
-              <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
-                {bulkTracks.map((t, idx) => (
-                  <div key={idx} className="flex gap-2">
-                    <div className="flex-1 relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[10px] font-mono text-studio-muted w-4">{idx + 1}</span>
-                      <input 
-                        type="text"
-                        value={t}
-                        onChange={e => updateRow(idx, e.target.value)}
-                        placeholder="Title"
-                        className="w-full bg-studio-base border border-studio-border rounded-lg pl-8 pr-3 py-1.5 text-sm outline-none focus:border-studio-accent"
-                      />
-                    </div>
-                    {bulkTracks.length > 1 && (
-                      <button type="button" onClick={() => removeRow(idx)} className="p-1.5 text-studio-muted hover:text-red-400">
-                        <X className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-                ))}
-                <button 
-                  type="button"
-                  onClick={addRow}
-                  className="w-full py-1.5 border border-dashed border-studio-border rounded-lg text-xs text-studio-muted hover:text-studio-accent transition-colors flex items-center justify-center gap-2"
-                >
-                  <Plus className="w-3 h-3" />
-                  Add Track
-                </button>
-              </div>
-
-              <div className="space-y-1.5 pt-2">
-                <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Link (Applied to all)</label>
-                <div className="relative">
-                  <ExternalLink className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-studio-muted" />
-                  <input 
-                    type="url" 
-                    value={untitled} 
-                    onChange={e => setUntitled(e.target.value)}
-                    className="w-full bg-studio-base border border-studio-border rounded-lg pl-9 pr-3 py-2 text-sm outline-none focus:border-studio-accent"
-                    placeholder="https://..."
-                  />
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div className="pt-4">
-            <button type="submit" className="w-full py-3 bg-white text-black font-bold rounded-xl hover:opacity-90 transition-opacity flex items-center justify-center gap-2 shadow-lg">
-              {initialTrack ? "Update Track" : (activeTab === 'single' ? "Add Track to Stack" : `Create ${bulkTracks.filter(t => t.trim()).length} tracks`)}
-            </button>
+        <div className="space-y-4 pt-4 border-t border-studio-border">
+          <div className="space-y-1.5">
+            <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Track Title *</label>
+            <input 
+              autoFocus
+              type="text" 
+              value={title} 
+              onChange={e => setTitle(e.target.value)}
+              className="w-full bg-studio-base border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent"
+              placeholder="e.g. Moonlight Drive"
+              required
+            />
           </div>
-        </form>
-      </div>
+          <div className="space-y-1.5">
+            <div className="flex justify-between items-center text-[10px] font-bold uppercase tracking-widest text-studio-muted">
+              <span>Progress</span>
+              <span className="font-mono text-studio-text">{pct}%</span>
+            </div>
+            <input 
+              type="range" 
+              min="0" max="100" 
+              value={pct}
+              onChange={e => {
+                const val = parseInt(e.target.value);
+                const rounded = Math.round(val / 5) * 5;
+                setPct(rounded);
+              }}
+              className="w-full accent-studio-accent bg-studio-border h-1 rounded-full appearance-none cursor-pointer"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Link (Untitled, Dropbox, etc)</label>
+            <input 
+              type="url" 
+              value={untitled} 
+              onChange={e => setUntitled(e.target.value)}
+              className="w-full bg-studio-base border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent"
+              placeholder="https://..."
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Notes</label>
+            <AutoResizeTextarea 
+              value={notes} 
+              onChange={e => setNotes(e.target.value)}
+              className="w-full bg-studio-base border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent"
+              placeholder="Notes, feedback..."
+              maxHeight="300px"
+            />
+          </div>
+        </div>
+
+        <div className="pt-4">
+          <button type="submit" className="w-full py-3 bg-white text-black font-bold rounded-xl hover:opacity-90 transition-opacity flex items-center justify-center gap-2 shadow-lg">
+            {initialTrack ? "Update Track" : "Add Track to Stack"}
+          </button>
+        </div>
+      </form>
     </Modal>
   );
 }
@@ -1758,7 +1675,6 @@ function AddProjectModal({ isOpen, onClose, onSave, onSaveWithTracks, initialPro
   onSaveWithTracks: (project: Omit<Project, 'id'>, tracks: string[]) => void;
   initialProject: Project | null;
 }) {
-  const [activeTab, setActiveTab] = useState<'single' | 'project'>('project');
   const [name, setName] = useState('');
   const [artist, setArtist] = useState('');
   const [notes, setNotes] = useState('');
@@ -1772,7 +1688,6 @@ function AddProjectModal({ isOpen, onClose, onSave, onSaveWithTracks, initialPro
       setArtist(initialProject.artist);
       setNotes(initialProject.notes);
       setLink(initialProject.link || '');
-      setActiveTab('project');
     } else {
       setName('');
       setArtist('');
@@ -1780,7 +1695,6 @@ function AddProjectModal({ isOpen, onClose, onSave, onSaveWithTracks, initialPro
       setLink('');
       setTracks(['']);
       setTrackCountInput('1');
-      setActiveTab('project');
     }
   }, [initialProject, isOpen]);
 
@@ -1807,12 +1721,8 @@ function AddProjectModal({ isOpen, onClose, onSave, onSaveWithTracks, initialPro
     if (initialProject) {
       onSave({ name, artist, notes, link });
     } else {
-      if (activeTab === 'single') {
-        onSaveWithTracks({ name, artist, notes, link }, name.trim() ? [name] : []);
-      } else {
-        const validTracks = tracks.filter(t => t.trim());
-        onSaveWithTracks({ name, artist, notes, link }, validTracks);
-      }
+      const validTracks = tracks.filter(t => t.trim());
+      onSaveWithTracks({ name, artist, notes, link }, validTracks);
     }
     onClose();
   };
@@ -1828,159 +1738,124 @@ function AddProjectModal({ isOpen, onClose, onSave, onSaveWithTracks, initialPro
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={initialProject ? "Edit Project" : "New Collection"}>
-      <div className="space-y-6">
-        {!initialProject && (
-          <div className="flex bg-studio-base p-1 rounded-lg border border-studio-border">
-            <button 
-              type="button"
-              onClick={() => setActiveTab('single')}
-              className={cn(
-                "flex-1 py-1.5 text-[10px] font-bold rounded-md transition-all flex items-center justify-center gap-2 uppercase tracking-wider",
-                activeTab === 'single' ? "bg-studio-raised text-studio-accent shadow-sm border border-studio-border" : "text-studio-muted hover:text-studio-text"
-              )}
-            >
-              <Music className="w-3 h-3" />
-              Single
-            </button>
-            <button 
-              type="button"
-              onClick={() => setActiveTab('project')}
-              className={cn(
-                "flex-1 py-1.5 text-[10px] font-bold rounded-md transition-all flex items-center justify-center gap-2 uppercase tracking-wider",
-                activeTab === 'project' ? "bg-studio-raised text-studio-text shadow-sm border border-studio-border" : "text-studio-muted hover:text-studio-text"
-              )}
-            >
-              <FolderKanban className="w-3 h-3" />
-              EP / Album
-            </button>
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5 flex-1">
-              <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">
-                {activeTab === 'single' ? 'Title *' : 'Project Name *'}
-              </label>
-              <div className="relative">
-                {activeTab === 'single' ? (
-                  <Music className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-studio-muted" />
-                ) : (
-                  <FolderKanban className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-studio-muted" />
-                )}
-                <input 
-                  autoFocus
-                  type="text" 
-                  value={name} 
-                  onChange={e => setName(e.target.value)}
-                  className="w-full bg-studio-raised border border-studio-border rounded-lg pl-9 pr-3 py-2 text-sm outline-none focus:border-studio-accent"
-                  placeholder={activeTab === 'single' ? "e.g. Moonlight Drive" : "e.g. Free Range EP"}
-                  required
-                />
-              </div>
-            </div>
-            <div className="space-y-1.5 flex-1">
-              <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Main Artist</label>
-              <div className="relative">
-                <Music className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-studio-muted" />
-                <input 
-                  type="text" 
-                  value={artist} 
-                  onChange={e => setArtist(e.target.value)}
-                  className="w-full bg-studio-raised border border-studio-border rounded-lg pl-9 pr-3 py-2 text-sm outline-none focus:border-studio-accent"
-                  placeholder="Artist name"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Project Link (Quick Listen)</label>
+    <Modal isOpen={isOpen} onClose={onClose} title={initialProject ? "Edit Project" : "New Project / Collection"}>
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-1.5 flex-1">
+            <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Project Name *</label>
             <div className="relative">
-              <ExternalLink className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-studio-muted" />
+              <FolderKanban className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-studio-muted" />
               <input 
-                type="url" 
-                value={link} 
-                onChange={e => setLink(e.target.value)}
+                autoFocus
+                type="text" 
+                value={name} 
+                onChange={e => setName(e.target.value)}
                 className="w-full bg-studio-raised border border-studio-border rounded-lg pl-9 pr-3 py-2 text-sm outline-none focus:border-studio-accent"
-                placeholder="https://soundcloud.com/..."
+                placeholder="e.g. Free Range EP"
+                required
               />
             </div>
           </div>
-
-
-          {!initialProject && activeTab === 'project' && (
-            <div className="space-y-4 pt-4 border-t border-studio-border">
-              <div className="space-y-1.5 p-3 bg-studio-accent/5 border border-studio-accent/10 rounded-xl">
-                  <label className="text-[10px] uppercase tracking-widest text-studio-accent font-bold block mb-1">How many tracks in this project?</label>
-                  <input 
-                    type="number" 
-                    min="1" 
-                    max="50"
-                    value={trackCountInput}
-                    onChange={e => handleTrackCountChange(e.target.value)}
-                    className="w-full bg-studio-base border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent font-mono"
-                    placeholder="Quantity (e.g. 5)"
-                  />
-              </div>
-
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Track Titles</label>
-                  <span className="text-[10px] font-mono text-studio-muted">{tracks.filter(t => t.trim()).length} total</span>
-                </div>
-                <div className="space-y-2 max-h-[240px] overflow-y-auto pr-1">
-                  {tracks.map((t, idx) => (
-                    <div key={idx} className="flex gap-2">
-                      <div className="flex-1 relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[10px] font-mono text-studio-muted w-4">{idx + 1}</span>
-                        <input 
-                          type="text"
-                          value={t}
-                          onChange={e => updateTrack(idx, e.target.value)}
-                          placeholder="Track title"
-                          className="w-full bg-studio-base border border-studio-border rounded-lg pl-8 pr-3 py-1.5 text-sm outline-none focus:border-studio-accent"
-                        />
-                      </div>
-                      {tracks.length > 1 && (
-                        <button type="button" onClick={() => removeTrack(idx)} className="p-1.5 text-studio-muted hover:text-red-400">
-                          <X className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                  <button 
-                    type="button"
-                    onClick={addTrack}
-                    className="w-full py-1.5 border border-dashed border-studio-border rounded-lg text-xs text-studio-muted hover:text-studio-accent transition-colors flex items-center justify-center gap-2"
-                  >
-                    <Plus className="w-3 h-3" />
-                    Add Track
-                  </button>
-                </div>
-              </div>
+          <div className="space-y-1.5 flex-1">
+            <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Main Artist</label>
+            <div className="relative">
+              <UserIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-studio-muted" />
+              <input 
+                type="text" 
+                value={artist} 
+                onChange={e => setArtist(e.target.value)}
+                className="w-full bg-studio-raised border border-studio-border rounded-lg pl-9 pr-3 py-2 text-sm outline-none focus:border-studio-accent"
+                placeholder="Artist name"
+              />
             </div>
-          )}
+          </div>
+        </div>
 
-          <div className="space-y-1.5">
-            <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Project Notes</label>
-            <AutoResizeTextarea 
-              value={notes} 
-              onChange={e => setNotes(e.target.value)}
-              className="w-full bg-studio-raised border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent"
-              placeholder="Vision, deadlines, etc..."
-              maxHeight="300px"
+        <div className="space-y-1.5">
+          <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Project Link (Quick Listen)</label>
+          <div className="relative">
+            <ExternalLink className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-studio-muted" />
+            <input 
+              type="url" 
+              value={link} 
+              onChange={e => setLink(e.target.value)}
+              className="w-full bg-studio-raised border border-studio-border rounded-lg pl-9 pr-3 py-2 text-sm outline-none focus:border-studio-accent"
+              placeholder="https://soundcloud.com/..."
             />
           </div>
+        </div>
 
-          <div className="pt-4">
-            <button type="submit" className="w-full py-3 bg-white text-black font-bold rounded-xl hover:opacity-90 transition-opacity flex items-center justify-center gap-2 shadow-lg">
-              {initialProject ? "Save Project" : (activeTab === 'single' ? "Create Single Project" : "Create Project with Tracks")}
-            </button>
+
+        {!initialProject && (
+          <div className="space-y-4 pt-4 border-t border-studio-border">
+            <div className="space-y-1.5 p-3 bg-studio-accent/5 border border-studio-accent/10 rounded-xl">
+                <label className="text-[10px] uppercase tracking-widest text-studio-accent font-bold block mb-1">How many tracks in this project?</label>
+                <input 
+                  type="number" 
+                  min="1" 
+                  max="50"
+                  value={trackCountInput}
+                  onChange={e => handleTrackCountChange(e.target.value)}
+                  className="w-full bg-studio-base border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent font-mono"
+                  placeholder="Quantity (e.g. 5)"
+                />
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Track Titles</label>
+                <span className="text-[10px] font-mono text-studio-muted">{tracks.filter(t => t.trim()).length} total</span>
+              </div>
+              <div className="space-y-2 max-h-[280px] overflow-y-auto pr-1">
+                {tracks.map((t, idx) => (
+                  <div key={idx} className="flex gap-2">
+                    <div className="flex-1 relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[10px] font-mono text-studio-muted w-4">{idx + 1}</span>
+                      <input 
+                        type="text"
+                        value={t}
+                        onChange={e => updateTrack(idx, e.target.value)}
+                        placeholder="Track title"
+                        className="w-full bg-studio-base border border-studio-border rounded-lg pl-8 pr-3 py-1.5 text-sm outline-none focus:border-studio-accent"
+                      />
+                    </div>
+                    {tracks.length > 1 && (
+                      <button type="button" onClick={() => removeTrack(idx)} className="p-1.5 text-studio-muted hover:text-red-400">
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+                <button 
+                  type="button"
+                  onClick={addTrack}
+                  className="w-full py-1.5 border border-dashed border-studio-border rounded-lg text-xs text-studio-muted hover:text-studio-accent transition-colors flex items-center justify-center gap-2"
+                >
+                  <Plus className="w-3 h-3" />
+                  Add Track
+                </button>
+              </div>
+            </div>
           </div>
-        </form>
-      </div>
+        )}
+
+        <div className="space-y-1.5">
+          <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold block">Project Notes</label>
+          <AutoResizeTextarea 
+            value={notes} 
+            onChange={e => setNotes(e.target.value)}
+            className="w-full bg-studio-raised border border-studio-border rounded-lg px-3 py-2 text-sm outline-none focus:border-studio-accent"
+            placeholder="Vision, deadlines, etc..."
+            maxHeight="300px"
+          />
+        </div>
+
+        <div className="pt-4">
+          <button type="submit" className="w-full py-3 bg-white text-black font-bold rounded-xl hover:opacity-90 transition-opacity flex items-center justify-center gap-2 shadow-lg">
+            {initialProject ? "Save Project" : "Create Project with Tracks"}
+          </button>
+        </div>
+      </form>
     </Modal>
   );
 }

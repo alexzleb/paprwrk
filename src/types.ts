@@ -19,6 +19,7 @@ export interface Track {
   notes: string;
   untitled: string; // URL
   done: boolean;
+  hidden?: boolean;
   order: number;
   ownerId?: string;
   createdAt?: any;

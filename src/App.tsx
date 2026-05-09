@@ -1610,7 +1610,6 @@ function AddTrackModal({ isOpen, onClose, projects, onSave, initialTrack }: {
           <div className="space-y-1.5">
             <label className="text-[10px] uppercase tracking-widest text-studio-muted font-bold">Track Title *</label>
             <input 
-              autoFocus
               type="text" 
               value={title} 
               onChange={e => setTitle(e.target.value)}
@@ -1746,7 +1745,6 @@ function AddProjectModal({ isOpen, onClose, onSave, onSaveWithTracks, initialPro
             <div className="relative">
               <FolderKanban className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-studio-muted" />
               <input 
-                autoFocus
                 type="text" 
                 value={name} 
                 onChange={e => setName(e.target.value)}

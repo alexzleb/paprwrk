@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, ReactNode, FormEvent, useRef, ChangeEvent, RefObject } from 'react';
+import { useState, useEffect, useMemo, ReactNode, FormEvent, useRef, ChangeEvent, RefObject, KeyboardEvent } from 'react';
 import { Plus, Download, Archive, FolderKanban, Layers, Filter, X, ExternalLink, GripVertical, CheckCircle2, RotateCcw, Trash2, Edit3, Music, LogIn, LogOut, User as UserIcon, Loader2, GripHorizontal, ChevronDown, Headphones, Eye, EyeOff } from 'lucide-react';
 import { motion, AnimatePresence, Reorder, useDragControls } from 'motion/react';
 import { cn } from './lib/utils.ts';
@@ -1504,6 +1504,77 @@ function AutoResizeTextarea({ value, onChange, placeholder, className, minHeight
     }
   };
 
+  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter') {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+
+      const { selectionStart, selectionEnd, value: currentVal } = textarea;
+      
+      // If we're at the very end of a line that only has a bullet point, pressing enter should delete the bullet point 
+      // (standard list behavior to end a list)
+      const lines = currentVal.substring(0, selectionStart).split('\n');
+      const currentLine = lines[lines.length - 1];
+      
+      if (currentLine === '• ') {
+        e.preventDefault();
+        const newValue = currentVal.substring(0, selectionStart - 2) + '\n' + currentVal.substring(selectionEnd);
+        const event = {
+          target: { ...textarea, value: newValue },
+          currentTarget: { ...textarea, value: newValue }
+        } as any;
+        onChange(event);
+        
+        setTimeout(() => {
+          if (textareaRef.current) {
+            textareaRef.current.setSelectionRange(selectionStart - 1, selectionStart - 1);
+          }
+        }, 0);
+        return;
+      }
+
+      e.preventDefault();
+      const newValue = currentVal.substring(0, selectionStart) + '\n• ' + currentVal.substring(selectionEnd);
+      
+      const event = {
+        target: { ...textarea, value: newValue },
+        currentTarget: { ...textarea, value: newValue }
+      } as any;
+      onChange(event);
+
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.setSelectionRange(selectionStart + 3, selectionStart + 3);
+        }
+      }, 0);
+    }
+  };
+
+  const handleInternalChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
+    const textarea = e.target;
+    let val = textarea.value;
+    const { selectionStart } = textarea;
+
+    // Auto-bullet the very first character if it's not a bullet
+    if (val.length > 0 && !val.startsWith('•') && !val.startsWith('\n')) {
+      val = '• ' + val;
+      const event = {
+        ...e,
+        target: { ...textarea, value: val }
+      } as ChangeEvent<HTMLTextAreaElement>;
+      onChange(event);
+
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.setSelectionRange(selectionStart + 2, selectionStart + 2);
+        }
+      }, 0);
+      return;
+    }
+
+    onChange(e);
+  };
+
   useEffect(() => {
     adjustHeight();
   }, [value]);
@@ -1512,7 +1583,8 @@ function AutoResizeTextarea({ value, onChange, placeholder, className, minHeight
     <textarea
       ref={textareaRef}
       value={value}
-      onChange={onChange}
+      onChange={handleInternalChange}
+      onKeyDown={handleKeyDown}
       onInput={adjustHeight}
       placeholder={placeholder}
       className={cn("w-full resize-none scrollbar-thin scrollbar-thumb-studio-border/50 scrollbar-track-transparent", className)}

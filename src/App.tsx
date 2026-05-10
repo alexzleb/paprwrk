@@ -370,7 +370,7 @@ export default function App() {
   return (
     <div className="min-h-screen font-sans selection:bg-studio-accent selection:text-studio-bg">
       {/* Header */}
-      <header className="sticky top-0 z-40 bg-studio-bg/80 backdrop-blur-md border-b border-studio-border px-4 md:px-6 py-3 md:pt-7 md:pb-5 flex flex-col md:flex-row items-center justify-between gap-4 md:gap-0">
+      <header className="sticky top-0 z-40 bg-studio-bg/80 backdrop-blur-md border-b border-studio-border px-4 md:px-6 py-3 md:py-4 flex flex-col md:flex-row items-center justify-between gap-4 md:gap-0">
         {syncError && (
           <div className="absolute top-full left-0 right-0 bg-red-500/10 border-b border-red-500/20 py-1.5 px-4 text-[10px] text-red-400 font-bold text-center animate-pulse">
             {syncError}
